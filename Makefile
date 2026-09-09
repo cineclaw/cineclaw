@@ -12,9 +12,10 @@ BUILDER ?= multiarch
 CYAN  := \033[0;36m
 GREEN := \033[0;32m
 YELLOW:= \033[0;33m
+RED   := \033[0;31m
 NC    := \033[0m
 
-.PHONY: help login check-builder \
+.PHONY: help login check-builder prune-cache \
         build-local build-frontend-local build-tracker-local build-indexer-local \
         publish-all publish-frontend publish-tracker publish-indexer \
         up down restart logs pull status
@@ -23,17 +24,20 @@ help: ## Show this help message
 	@echo -e "$(CYAN)CineClaw Automation Makefile$(NC)"
 	@echo -e "Usage: make [target] [VERSION=1.0.0] [REGISTRY=ghcr.io/cineclaw]"
 	@echo ""
-	@echo -e "$(YELLOW)Publishing to GHCR (Multi-Arch: $(PLATFORMS)):$(NC)"
+	@echo -e "$(YELLOW)Publishing to GHCR (Multi-Arch with Compiler Cache: $(PLATFORMS)):$(NC)"
 	@echo -e "  $(GREEN)publish-all$(NC)         - Build and push all 3 services to GHCR"
-	@echo -e "  $(GREEN)publish-indexer$(NC)     - Build and push imdb-indexer to GHCR (multi-arch)"
-	@echo -e "  $(GREEN)publish-tracker$(NC)     - Build and push tracker-proxy to GHCR (multi-arch)"
-	@echo -e "  $(GREEN)publish-frontend$(NC)    - Build and push frontend to GHCR (multi-arch)"
+	@echo -e "  $(GREEN)publish-indexer$(NC)     - Build and push imdb-indexer to GHCR (multi-arch + cargo cache)"
+	@echo -e "  $(GREEN)publish-tracker$(NC)     - Build and push tracker-proxy to GHCR (multi-arch + go cache)"
+	@echo -e "  $(GREEN)publish-frontend$(NC)    - Build and push frontend to GHCR (multi-arch + npm cache)"
 	@echo ""
-	@echo -e "$(YELLOW)Local Fast Builds (Host Architecture):$(NC)"
+	@echo -e "$(YELLOW)Local Fast Builds (Host Architecture with Persistent Cache):$(NC)"
 	@echo -e "  $(GREEN)build-local$(NC)         - Build all 3 services locally for host arch"
-	@echo -e "  $(GREEN)build-indexer-local$(NC) - Build imdb-indexer locally for host arch"
-	@echo -e "  $(GREEN)build-tracker-local$(NC) - Build tracker-proxy locally for host arch"
-	@echo -e "  $(GREEN)build-frontend-local$(NC)- Build frontend locally for host arch"
+	@echo -e "  $(GREEN)build-indexer-local$(NC) - Build imdb-indexer locally with cargo cache"
+	@echo -e "  $(GREEN)build-tracker-local$(NC) - Build tracker-proxy locally with go cache"
+	@echo -e "  $(GREEN)build-frontend-local$(NC)- Build frontend locally with npm cache"
+	@echo ""
+	@echo -e "$(YELLOW)Cache & Maintenance:$(NC)"
+	@echo -e "  $(GREEN)prune-cache$(NC)         - Clear BuildKit compiler cache volumes"
 	@echo ""
 	@echo -e "$(YELLOW)Orchestration & Diagnostics:$(NC)"
 	@echo -e "  $(GREEN)login$(NC)               - Login to ghcr.io using gh CLI credentials"
@@ -61,14 +65,20 @@ check-builder: ## Verify Docker Buildx multi-arch builder
 	}
 	@docker buildx use $(BUILDER)
 
+prune-cache: check-builder ## Clear persistent compiler caches (cargo, go, npm)
+	@echo -e "$(YELLOW)Pruning BuildKit compilation cache...$(NC)"
+	docker buildx prune --builder $(BUILDER) -f
+	@echo -e "$(GREEN)✓ Compilation cache cleared$(NC)"
+
 # ------------------------------------------------------------------------------
-# Multi-Arch Builds & GHCR Publishing
+# Multi-Arch Builds & GHCR Publishing (with Registry Layer Cache + Cache Mounts)
 # ------------------------------------------------------------------------------
 
 publish-indexer: check-builder ## Build and push imdb-indexer to GHCR (amd64 + arm64)
 	@echo -e "$(CYAN)Building and pushing $(REGISTRY)/imdb-indexer:$(VERSION) ($(PLATFORMS))...$(NC)"
 	docker buildx build \
 		--platform $(PLATFORMS) \
+		--cache-from type=registry,ref=$(REGISTRY)/imdb-indexer:latest \
 		--build-arg VERSION=$(VERSION) \
 		-t $(REGISTRY)/imdb-indexer:$(VERSION) \
 		-t $(REGISTRY)/imdb-indexer:latest \
@@ -80,6 +90,7 @@ publish-tracker: check-builder ## Build and push tracker-proxy to GHCR (amd64 + 
 	@echo -e "$(CYAN)Building and pushing $(REGISTRY)/tracker-proxy:$(VERSION) ($(PLATFORMS))...$(NC)"
 	docker buildx build \
 		--platform $(PLATFORMS) \
+		--cache-from type=registry,ref=$(REGISTRY)/tracker-proxy:latest \
 		--build-arg VERSION=$(VERSION) \
 		-t $(REGISTRY)/tracker-proxy:$(VERSION) \
 		-t $(REGISTRY)/tracker-proxy:latest \
@@ -91,6 +102,7 @@ publish-frontend: check-builder ## Build and push frontend to GHCR (amd64 + arm6
 	@echo -e "$(CYAN)Building and pushing $(REGISTRY)/frontend:$(VERSION) ($(PLATFORMS))...$(NC)"
 	docker buildx build \
 		--platform $(PLATFORMS) \
+		--cache-from type=registry,ref=$(REGISTRY)/frontend:latest \
 		--build-arg VERSION=$(VERSION) \
 		-t $(REGISTRY)/frontend:$(VERSION) \
 		-t $(REGISTRY)/frontend:latest \
@@ -104,20 +116,35 @@ publish-all: publish-frontend publish-tracker publish-indexer ## Build and push 
 	@echo -e "$(GREEN)========================================================$(NC)"
 
 # ------------------------------------------------------------------------------
-# Fast Local Builds (Single-Arch for dev)
+# Fast Local Builds (Single-Arch with Persistent Cache Mounts)
 # ------------------------------------------------------------------------------
 
-build-indexer-local: ## Fast local build for host architecture
+build-indexer-local: check-builder ## Fast local build for host architecture with persistent cache
 	@echo -e "$(CYAN)Building imdb-indexer for host architecture...$(NC)"
-	docker build --build-arg VERSION=$(VERSION) -t $(REGISTRY)/imdb-indexer:$(VERSION) -t $(REGISTRY)/imdb-indexer:latest ./imdb-indexer
+	docker buildx build \
+		--load \
+		--build-arg VERSION=$(VERSION) \
+		-t $(REGISTRY)/imdb-indexer:$(VERSION) \
+		-t $(REGISTRY)/imdb-indexer:latest \
+		./imdb-indexer
 
-build-tracker-local: ## Fast local build for host architecture
+build-tracker-local: check-builder ## Fast local build for host architecture with persistent cache
 	@echo -e "$(CYAN)Building tracker-proxy for host architecture...$(NC)"
-	docker build --build-arg VERSION=$(VERSION) -t $(REGISTRY)/tracker-proxy:$(VERSION) -t $(REGISTRY)/tracker-proxy:latest ./tracker-proxy
+	docker buildx build \
+		--load \
+		--build-arg VERSION=$(VERSION) \
+		-t $(REGISTRY)/tracker-proxy:$(VERSION) \
+		-t $(REGISTRY)/tracker-proxy:latest \
+		./tracker-proxy
 
-build-frontend-local: ## Fast local build for host architecture
+build-frontend-local: check-builder ## Fast local build for host architecture with persistent cache
 	@echo -e "$(CYAN)Building frontend for host architecture...$(NC)"
-	docker build --build-arg VERSION=$(VERSION) -t $(REGISTRY)/frontend:$(VERSION) -t $(REGISTRY)/frontend:latest ./frontend
+	docker buildx build \
+		--load \
+		--build-arg VERSION=$(VERSION) \
+		-t $(REGISTRY)/frontend:$(VERSION) \
+		-t $(REGISTRY)/frontend:latest \
+		./frontend
 
 build-local: build-frontend-local build-tracker-local build-indexer-local ## Build all services for host architecture
 

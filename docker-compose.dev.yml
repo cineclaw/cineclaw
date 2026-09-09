@@ -1,0 +1,22 @@
+# Docker Compose Override for Local Development (Build from source)
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+services:
+  frontend:
+    build:
+      context: ./frontend
+    image: cineclaw-frontend:dev
+
+  imdb-indexer:
+    build:
+      context: ./imdb-indexer
+    image: cineclaw-imdb-indexer:dev
+
+  tracker-proxy:
+    build:
+      context: ./tracker-proxy
+    image: cineclaw-tracker-proxy:dev
+
+  jellyfin:
+    build:
+      context: ./jellyfin
+    image: cineclaw-jellyfin:dev

@@ -1,0 +1,136 @@
+name: cineclaw
+
+services:
+  frontend:
+    image: ghcr.io/cineclaw/frontend:${IMAGE_TAG:-latest}
+    container_name: frontend
+    restart: unless-stopped
+    ports:
+      - "${PORT_FRONTEND:-3000}:3000"
+    depends_on:
+      - imdb-indexer
+      - tracker-proxy
+    networks:
+      - cineclaw-net
+
+  imdb-indexer:
+    image: ghcr.io/cineclaw/imdb-indexer:${IMAGE_TAG:-latest}
+    container_name: imdb-indexer
+    restart: unless-stopped
+    ports:
+      - "${PORT_INDEXER:-8090}:8090"
+    volumes:
+      - ${DATA_DIR:-./data}/imdb-indexer:/data
+    environment:
+      - TMDB_API_KEY=${TMDB_API_KEY:-db85bce5bf5bf9bac3c140447bf5ac5d}
+      - DATA_DIR=/data
+      - TMDB_CACHE_DIR=/data/posters
+    networks:
+      - cineclaw-net
+
+  tracker-proxy:
+    image: ghcr.io/cineclaw/tracker-proxy:${IMAGE_TAG:-latest}
+    container_name: tracker-proxy
+    restart: unless-stopped
+    ports:
+      - "${PORT_PROXY:-9118}:9118"
+    volumes:
+      - ${DATA_DIR:-./data}/tracker-proxy/config.yaml:/app/config.yaml
+      - ${DATA_DIR:-./data}/tracker-proxy/cache:/app/cache
+      - ${DATA_DIR:-./data}/media/source:/media/source
+      - ${DATA_DIR:-./data}/media/library:/media/library
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - JELLYFIN_URL=http://jellyfin:8096
+      - JELLYFIN_API_KEY=${JELLYFIN_API_KEY:-a4151fee9ef64ea6b23b185f8fe2720e}
+      - TIRAMISU_URL=http://tiramisu:8090
+      - MEDIA_SOURCE_PATH=/media/source
+      - MEDIA_LIBRARY_PATH=/media/library
+      - MEDIA_VIRTUAL_PATH=/media/virtual
+      - JELLYFIN_MEDIA_PATH=/media
+      - IMDB_INDEXER_URL=http://imdb-indexer:8090
+      - NNMCLUB_USERNAME=${NNMCLUB_USERNAME:-}
+      - NNMCLUB_PASSWORD=${NNMCLUB_PASSWORD:-}
+      - RUTRACKER_USERNAME=${RUTRACKER_USERNAME:-}
+      - RUTRACKER_PASSWORD=${RUTRACKER_PASSWORD:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - flaresolverr
+      - tiramisu
+      - jellyfin
+      - imdb-indexer
+    networks:
+      - cineclaw-net
+
+  tiramisu:
+    image: mrrobotogit/tiramisu:v1.9.59
+    container_name: tiramisu
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    ports:
+      - "${PORT_TIRAMISU:-9080}:9080"
+      - "8092:8090"
+    volumes:
+      - ${DATA_DIR:-./data}/tiramisu/config.json:/config.json
+      - ${DATA_DIR:-./data}/tiramisu/root:/usr/local/tiramisu
+      - ${DATA_DIR:-./data}/media/source:/media/source
+      - ${DATA_DIR:-./data}/media/virtual:/media/virtual:rshared
+    environment:
+      - MKV_PROXY_CONFIG_PATH=/config.json
+      - TIRAMISU_ROOT_PATH=/usr/local/tiramisu
+      - TIRAMISU_SOURCE_PATH=/media/source
+      - TIRAMISU_MOUNT_PATH=/media/virtual
+    networks:
+      - cineclaw-net
+
+  jellyfin:
+    image: jellyfin/jellyfin:10.11.11
+    container_name: jellyfin
+    restart: unless-stopped
+    ports:
+      - "${PORT_JELLYFIN:-8096}:8096"
+    volumes:
+      - ${DATA_DIR:-./data}/jellyfin/config:/config
+      - ${DATA_DIR:-./data}/jellyfin/cache:/cache
+      - ${DATA_DIR:-./data}/media/library:/media
+      - ${DATA_DIR:-./data}/media/virtual:/media/virtual:rslave
+    networks:
+      - cineclaw-net
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:v3.5.0
+    container_name: flaresolverr
+    restart: unless-stopped
+    ports:
+      - "${PORT_FLARESOLVERR:-8191}:8191"
+    environment:
+      - LOG_LEVEL=info
+      - LOG_HTML=false
+      - CAPTCHA_SOLVER=none
+      - TZ=${TZ:-Europe/Moscow}
+    networks:
+      - cineclaw-net
+
+  lodestarr:
+    image: ghcr.io/ddonindia/lodestarr:master
+    container_name: lodestarr
+    restart: unless-stopped
+    ports:
+      - "${PORT_LODESTARR:-3420}:3420"
+    volumes:
+      - ${DATA_DIR:-./data}/lodestarr:/root/.config/lodestarr
+    environment:
+      - RUST_LOG=info
+    networks:
+      - cineclaw-net
+
+networks:
+  cineclaw-net:
+    name: cineclaw-net
+    driver: bridge

@@ -1,0 +1,9 @@
+[submodule "frontend"]
+	path = frontend
+	url = https://github.com/cineclaw/frontend.git
+[submodule "imdb-indexer"]
+	path = imdb-indexer
+	url = https://github.com/cineclaw/imdb-indexer.git
+[submodule "tracker-proxy"]
+	path = tracker-proxy
+	url = https://github.com/cineclaw/tracker-proxy.git

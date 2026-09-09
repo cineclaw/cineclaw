@@ -5,7 +5,11 @@ Cine-Claw v2 is an extensible, self-hosted media platform designed for fast disc
 
 ```mermaid
 graph TD
-    Client["Browser / Frontend (Port 3000)"]
+    Client["Browser / PWA / External Client"] -->|Port 3000: Web UI & Protected API| Gateway["Frontend Nginx Edge Proxy (Port 3000)"]
+    
+    subgraph Edge Security & Auth
+        Gateway -->|"auth_request /api/auth/verify"| Auth["tracker-proxy /api/auth (Port 9118)"]
+    end
     
     subgraph Core Discovery & Metadata
         IMDb["imdb-indexer (Port 8090 - Rust)"]
@@ -46,9 +50,8 @@ graph TD
         Proxy -.->|Magnet| Lodestarr
     end
 
-    Client -->|Search & Seasons| IMDb
-    Client -->|Torrents & Dedup| Proxy
-    Client -->|One-Click Stream (POST /api/stream/mount)| Proxy
+    Gateway -->|Authorized /search, /poster| IMDb
+    Gateway -->|Authorized /torrents, /series, /api/*| Proxy
     Client -->|Watch Stream / Browse Library| Jellyfin
     Client -->|Direct Magnet Click| Transmission["Local Torrent Client (e.g. Transmission)"]
 ```

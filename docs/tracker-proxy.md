@@ -216,3 +216,26 @@ Because Jellyfin library files are symbolic links pointing to `/media/virtual/`,
 2. **Background Orphaned Stubs Reconciler / Garbage Collector**:
    Every 5 minutes (and immediately on container startup), `tracker-proxy` scans `/media/source/` against `/media/library/`. Any source folder or empty folder whose symlinks were deleted is automatically identified as orphaned, stripped of its torrent swarms in GoStorm, and purged from disk.
 
+---
+
+## 9. Authentication & Edge Gateway Security
+
+`tracker-proxy` includes a built-in, lightweight authentication service (`pkg/auth`) protecting all media and scraping endpoints when exposed to the Internet:
+
+### Endpoints
+- `POST /api/auth/login`: Accepts `{"username":"...", "password":"...", "remember_me": true/false}`. Validates credentials with `subtle.ConstantTimeCompare`, sets an `HttpOnly`, `SameSite=Lax` cookie (`cineclaw_session`), and returns `{ "success": true, "token": "...", "username": "...", "expires_at": "..." }`.
+- `GET /api/auth/verify`: Auth verification endpoint used by Nginx's `auth_request` subrequest directive. Returns `200 OK` (with `X-User` header) if authenticated, or `401 Unauthorized` if not.
+- `POST /api/auth/logout`: Clears the session cookie (`Max-Age=0`) and logs out.
+- `GET /api/auth/me`: Returns `{ "authenticated": true, "username": "..." }` or `401`.
+
+### Supported Authentication Methods
+`tracker-proxy` validates incoming requests in priority order:
+1. **Session Cookie**: `cineclaw_session=<token>` (used by web browser for poster `<img>` tags and web requests).
+2. **Bearer Token**: `Authorization: Bearer <token>` (used by frontend API client via RTK Query).
+3. **Basic Auth**: `Authorization: Basic <base64(user:pass)>` (used by curl, scripts, and external tools).
+
+### Token Security
+- Tokens are signed with HMAC-SHA256: `<base64_user>.<expiry_unix>.<random_salt>.<signature>`.
+- Token expiration is 30 days when "Remember Me" is checked, or 24 hours for standard sessions.
+- Secret key is configured via `AUTH_SECRET` in `.env` (or automatically generated on initialization).
+

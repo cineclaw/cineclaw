@@ -218,6 +218,20 @@ CineClaw v2 is architected around a **mobile-first cinema experience**:
   - `viewport-fit=cover` in `index.html` combined with `apple-mobile-web-app-status-bar-style: black-translucent`.
   - Headers and sticky top bars include `pt-[env(safe-area-inset-top)]` ensuring edge-to-edge immersion behind iOS Dynamic Island and notch without content clipping.
 
+### 10. Web Authentication & Session Handling
+- **State Management (`authSlice.ts`)**:
+  - Manages `token`, `username`, `isAuthenticated`, and `rememberMe`.
+  - Persists credentials into `localStorage` (if "Remember Me" is enabled, 30 days) or `sessionStorage` (for temporary browser sessions).
+- **Automated Request Authorization (`baseQuery.ts`)**:
+  - Custom base query wrapper automatically attaches `Authorization: Bearer <token>` to all RTK Query API calls.
+  - Intercepts `401 Unauthorized` responses and automatically dispatches `logout()` to prompt re-authentication.
+- **Login Modal (`LoginModal.tsx`)**:
+  - Dark cinema-themed modal matching `#07090e` obsidian aesthetic.
+  - Smooth password visibility toggle, error display, and "Запомнить меня на этом устройстве" checkbox.
+- **User Profile & Logout (`Header.tsx`)**:
+  - User badge displaying active username.
+  - One-click logout button triggering `POST /api/auth/logout` to invalidate server cookie and client storage.
+
 ---
 
 ## 7. UI Guidelines & Design System

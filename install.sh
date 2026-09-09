@@ -405,6 +405,9 @@ load_config_file() {
             NNMCLUB_PASSWORD|NNMCLUB_PASS) current_nnmclub_pass="$val" ;;
             TZ|TIMEZONE) current_tz="$val" ;;
             JELLYFIN_API_KEY) current_jellyfin_key="$val" ;;
+            AUTH_ENABLED) current_auth_enabled="$val" ;;
+            AUTH_USERNAME|AUTH_USER) current_auth_user="$val" ;;
+            AUTH_PASSWORD|AUTH_PASS) current_auth_pass="$val" ;;
         esac
     done < "$cfg"
 }
@@ -425,6 +428,9 @@ configure_environment() {
     local current_nnmclub_pass="${NNMCLUB_PASSWORD:-}"
     local current_tz="${TZ:-Europe/Moscow}"
     local current_jellyfin_key="${JELLYFIN_API_KEY:-a4151fee9ef64ea6b23b185f8fe2720e}"
+    local current_auth_enabled="${AUTH_ENABLED:-true}"
+    local current_auth_user="${AUTH_USERNAME:-admin}"
+    local current_auth_pass="${AUTH_PASSWORD:-wavemp3}"
 
     # Priority 1: Specified custom config file (-c / --config)
     if [ -n "$custom_config" ]; then
@@ -532,6 +538,14 @@ configure_environment() {
         # 5. Timezone
         prompt_read "   Timezone [$current_tz]: " input_tz
         [ -n "$input_tz" ] && current_tz="$input_tz"
+
+        # 6. Web UI & API Authentication
+        echo -e "\n${BOLD}5. Web UI & API Authentication${NC}"
+        echo -e "   Protects your cinema platform and API when accessed from the internet."
+        prompt_read "   Username [$current_auth_user]: " input_auth_user
+        [ -n "$input_auth_user" ] && current_auth_user="$input_auth_user"
+        prompt_read_secret "   Password [$current_auth_pass]: " input_auth_pass
+        [ -n "$input_auth_pass" ] && current_auth_pass="$input_auth_pass"
     fi
 
     # Write .env file
@@ -567,6 +581,11 @@ NNMCLUB_PASSWORD=$current_nnmclub_pass
 # Jellyfin API Key
 JELLYFIN_API_KEY=$current_jellyfin_key
 
+# Web UI & API Authentication
+AUTH_ENABLED=$current_auth_enabled
+AUTH_USERNAME=$current_auth_user
+AUTH_PASSWORD=$current_auth_pass
+
 # Host Ports
 PORT_FRONTEND=3000
 PORT_JELLYFIN=8096
@@ -586,6 +605,9 @@ EOF
     export NNMCLUB_USERNAME="$current_nnmclub_user"
     export NNMCLUB_PASSWORD="$current_nnmclub_pass"
     export JELLYFIN_API_KEY="$current_jellyfin_key"
+    export AUTH_ENABLED="$current_auth_enabled"
+    export AUTH_USERNAME="$current_auth_user"
+    export AUTH_PASSWORD="$current_auth_pass"
     export TZ="$current_tz"
     export PORT_FRONTEND=3000
     export PORT_JELLYFIN=8096

@@ -99,17 +99,25 @@ Supports instant local metadata generation and asset pre-downloading for Jellyfi
    - In-memory LRU cache (`resolved_cache`, capacity 1,000).
 7. **Curated Home Cinema Feeds & Paginated Deep Dive**:
    - `GET /api/feeds` (alias: `/feeds`)
-   - Aggregates 4 curated cinema discovery shelves (page 1, 20 items per shelf):
-     - **«В тренде на этой неделе»** (`trending`): `GET /3/trending/all/week?language=ru-RU`
+   - Curated cinema discovery shelves with support for `type=movie|tv` filtering:
+     - **«В тренде на этой неделе»** (`trending`): `GET /3/trending/{type}/week?language=ru-RU`
      - **«Свежие цифровые релизы»** (`digital`): `GET /3/discover/movie?language=ru-RU&sort_by=primary_release_date.desc&with_release_type=4|5&vote_count.gte=30` (guarantees movies that already dropped on VOD/streaming with high-quality WEB-DL torrent swarms)
-     - **«Популярные сериалы»** (`popular_series`): `GET /3/tv/popular?language=ru-RU`
+     - **«Популярные сериалы»** (`popular_series`): `GET /3/discover/tv?without_genres=10763,10764,10766,10767&vote_count.gte=50` (filters out German/local news broadcasts and infinite soap operas)
      - **«Шедевры всех времён»** (`top_rated`): `GET /3/movie/top_rated?language=ru-RU&vote_count.gte=1000`
-   - In-memory cache with 2-hour TTL (`feeds_cache: Arc<SyncMutex<Option<(Instant, Vec<FeedShelf>)>>>`).
-   - `GET /api/feeds/:shelf_id?page=N` (alias: `/feeds/:shelf_id`):
-     - Fetches page `N` (1-indexed, 20 items per page) for the given `shelf_id`.
+     - **«Apple TV+ Originals»** (`apple_tv`): `with_networks=2552` / `watch_provider=350`
+     - **«HBO / Max Originals»** (`hbo_max`): `with_networks=49` / `watch_provider=1899|384`
+     - **«Netflix Хиты»** (`netflix`): `with_networks=213` / `watch_provider=8`
+     - **«Amazon Prime Video»** (`amazon_prime`): `with_networks=1024` / `watch_provider=119`
+   - In-memory cache with 2-hour TTL (`feeds_cache`).
+   - `GET /api/feeds/:shelf_id?page=N&type=movie|tv` (alias: `/feeds/:shelf_id`):
+     - Fetches page `N` (1-indexed, 20 items per page) for the given `shelf_id` and optional `type` filter.
      - Returns `FeedShelf` with `page`, `total_pages`, `total_results`, and `items`.
      - In-memory LRU cache (`shelf_pages_cache`, capacity 10,000, 1h TTL).
-   - Returns localized Russian titles, original titles, poster paths, release years, vote averages, and media types.
+
+8. **Multi-Criteria Discovery Engine (`/api/catalog/discover`)**:
+   - `GET /api/catalog/discover?type=movie|tv&genres=...&countries=...&year_from=...&year_to=...&min_rating=...&page=N`
+   - Dynamically constructs TMDB Discover queries with intelligent vote thresholds (`vote_count.gte=30..100` depending on rating filters) and localized title resolution.
+   - Returns structured `FeedShelf` compatible with `ShelfModal` grid.
 
 ---
 

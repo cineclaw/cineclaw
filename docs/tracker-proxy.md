@@ -239,3 +239,26 @@ Because Jellyfin library files are symbolic links pointing to `/media/virtual/`,
 - Token expiration is 30 days when "Remember Me" is checked, or 24 hours for standard sessions.
 - Secret key is configured via `AUTH_SECRET` in `.env` (or automatically generated on initialization).
 
+---
+
+## 10. Tracker Swarm Hotlist Aggregator (`pkg/hotlist`)
+
+`tracker-proxy` proactively scrapes top-seeded releases from Russian trackers and correlates them with local IMDb metadata:
+
+### Architecture
+- **`scraper.go`**:
+  - Scrapes 10 pages (`page 0..9`) per category via RuTor category browsing (`/browse/{page}/{cat}/0/2`, sorted descending by seeders).
+  - Movies cover categories `1` (Зарубежные фильмы), `5` (Наши фильмы), and `7` (Мультипликация) — total 30 pages (~3,000 raw releases).
+  - TV series cover categories `4` (Зарубежные сериалы) and `16` (Наши сериалы) — total 20 pages (~2,000 raw releases).
+  - Enforces a strict concurrency limit of 2 parallel HTTP requests via `sem: make(chan struct{}, 2)` with a 50ms anti-ban pacing delay.
+- **`parser.go`**: Robust regex parsing extracting Russian title, English/original title, year, season, resolution (4K/1080p), and quality tags (WEB-DL, HDR10, BDRip, etc.).
+- **`matcher.go`**:
+  - Correlates releases against `imdb-indexer`'s Tantivy search index (`GET /search?q=...&limit=3`) using an in-run memoization cache (`lookupCache`), minimizing HTTP requests down from 3,000+ to ~250 unique titles.
+  - Clusters all release variants (4K Remux, 1080p WEB-DL, DUB, 720p), sums swarm seeds ($\sum \text{seeds}$) and leeches across all variants, and enriches items with verified IMDb `tconst`, genres, ratings, and poster URLs.
+- **`service.go`**: Background fetcher and persistent bbolt disk cache (`bucket: tracker_hotlist`) with a 2-hour TTL, providing sub-10ms response times.
+- **Endpoints**:
+  - `GET /torrents/hotlist?type=movie|tv&page=1&limit=20` (alias: `GET /api/stream/hotlist`)
+  - Supports query parameter `?refresh=true` (or `?refresh_cache=true`) to force an immediate background re-scrape.
+  - Returns `{ "id": "tracker_hotlist", "title": "Популярно на трекерах", "media_type": "movie|tv", "page": 1, "total_pages": ..., "total_results": ..., "items": [...] }`.
+
+

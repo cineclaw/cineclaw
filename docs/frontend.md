@@ -232,6 +232,20 @@ CineClaw v2 is architected around a **mobile-first cinema experience**:
   - User badge displaying active username.
   - One-click logout button triggering `POST /api/auth/logout` to invalidate server cookie and client storage.
 
+### 11. Catalog Discovery Hub & On-Demand Shelves
+- **Catalog Launcher Grid (`CatalogTilesGrid.tsx`)**:
+  - Replaces heavy initial loading of 4 eager shelves with interactive 9-tile hub.
+  - Displays top media toggle `[ 🎬 Фильмы | 📺 Сериалы ]` allowing user to switch global catalog focus before opening any list.
+  - Supported catalogs: «Популярно на трекерах» (`tracker_hotlist`), «Apple TV+ Originals» (`apple_tv`), «HBO / Max Originals» (`hbo_max`), «Netflix Хиты» (`netflix`), «Amazon Prime Video» (`amazon_prime`), «В тренде на этой неделе» (`trending`), «Свежие цифровые релизы» (`digital`), «Шедевры всех времён» (`top_rated`), and «Умный каталог & Фильтр» (`catalog_filter`).
+- **Interactive Multi-Criteria Filter Bar (`CatalogFilterBar.tsx`)**:
+  - Quick-filter chips for Countries (US, KR, JP, GB, FR, RU), Genres (Action, Sci-Fi, Thriller, Comedy, Drama, Criminal, Anime/Cartoons, Horror), Release Years (2025-2026, 2020-2024, 2010s, 2000s, 90s), and Ratings (Any, 7.0+, 7.5+, 8.0+).
+  - Dynamically passes query parameters to `/api/catalog/discover`.
+- **Dedicated Shelf Screen (`ShelfModal.tsx`)**:
+  - Desktop modal / mobile full-screen screen with infinite pagination (`+20` button).
+  - Displays live BitTorrent seeds badge (`🌱 {seeds} сидов`) on tracker hotlist items.
+  - Fast-paths items with resolved IMDb `tconst` directly into the cinema movie screen without TMDB roundtrips.
+  - Synchronized with browser history stack (`pushState` / `popstate`) for flawless back-gesture navigation.
+
 ---
 
 ## 7. UI Guidelines & Design System

@@ -41,19 +41,28 @@ tracker-proxy/
 - **Direct HTTP**: Does not require authentication or FlareSolverr.
 - **Encoding**: UTF-8.
 - **InfoHash**: Extracted directly from the magnet URI found in search result rows.
-- **Search Query**: Formats query as `"<title> <year>"` or `"<ru_title> <year>"`.
+- **Search Query & Sorting**: Uses `/search/0/0/0/2/<query>` to strictly sort search results by seed count descending (`sort=2`), ensuring the healthiest swarms are prioritized over low-seeded recent repacks (`sort=0`).
+- **Non-Video Clean Filtering**: Strips out non-video noise via regex pattern: `(?i)(\b(flac|lossless|alac|ape|soundtrack|ost|audiobook|аудиокнига|repack by|gog|pc game|crack|patch|pdf|fb2|epub|djvu)\b|\[(flac|mp3|lossless|pc|iso|android|ios)\])`.
 
 ### RuTracker (`pkg/trackers/rutracker`)
 - **Protection**: Protected by Cloudflare Turnstile.
 - **Authentication**: Uses FlareSolverr (`http://flaresolverr:8191/v1`) with `request.post` to solve Turnstile and authenticate with RuTracker login/password.
 - **Session**: Caches and reuses the `bb_session` cookie across requests until expired.
 - **InfoHash Resolution**: Search results contain Topic IDs but no InfoHash. The scraper fetches the topic page to extract the InfoHash, caching the result in bbolt's `topic_hashes` bucket.
+- **Strict Video Forum Whitelist**: Filters searches by video-only subforums based on media type:
+  - **Movies**: 1457 (UHD HDR), 1940 (UHD SDR), 271 (UHD Remux), 313 (HD), 312, 2339, 252, 1950, 2200, 941, 1666, 124, 352, 4, 1105, 1936, 314, 46.
+  - **TV Series**: 119 (UHD), 1171 (UHD), 2366 (HD), 1803, 842, 812 (UHD), 81 (HD), 920, 921, 1106, 315.
+  - Eliminates all music, audiobooks, software, and PC games.
 
 ### NNM-Club (`pkg/trackers/nnmclub`)
 - **Encoding**: **Windows-1251 (CP1251)**. All outgoing queries must be encoded to CP1251 and HTML responses decoded via `golang.org/x/text/encoding/charmap.Windows1251`.
 - **Strict Rate Limiting**: Sending $>2$ parallel requests triggers Cloudflare `503`.
   - Enforced by `nnmSemaphore = make(chan struct{}, 2)`.
   - Inter-request pacing: Minimum $75\text{ms} - 100\text{ms}$ delay between topic page fetches.
+- **Strict Video Forum Whitelist**: Replaces broad `f[]=-1` with dedicated video subforums based on media type:
+  - **Movies**: 954, 219, 1296 (UHD), 227 (HD), 882, 225, 221, 1177, 912, 909, 884, 1150, 1345, 1346, 891, 889, 682, 694, 1299, 1313, 1312, 1330, 1332, 1337, 1339, 620, 624, 628.
+  - **TV Series**: 768, 769, 1219, 1221, 1220, 1344, 1265, 784, 774, 770, 780, 781, 1300, 1322, 658, 232, 620, 624, 628.
+  - Guarantees search results contain zero audiobooks, software, or soundtracks.
 
 ---
 
@@ -250,15 +259,21 @@ Because Jellyfin library files are symbolic links pointing to `/media/virtual/`,
   - Scrapes 10 pages (`page 0..9`) per category via RuTor category browsing (`/browse/{page}/{cat}/0/2`, sorted descending by seeders).
   - Movies cover categories `1` (Зарубежные фильмы), `5` (Наши фильмы), and `7` (Мультипликация) — total 30 pages (~3,000 raw releases).
   - TV series cover categories `4` (Зарубежные сериалы) and `16` (Наши сериалы) — total 20 pages (~2,000 raw releases).
+  - Anime covers category `10` (Аниме) — 10 pages (~1,000 raw releases).
+  - Documentaries cover category `12` (Документальное кино и юмор) — 10 pages (~1,000 raw releases).
+  - 4K UHD Scraping (`ScrapeUHD`): Queries high-seed `2160p` and `UHD` across movie and TV categories.
+  - Exclusions: Asian doramas and Turkish series subcategories are explicitly omitted.
   - Enforces a strict concurrency limit of 2 parallel HTTP requests via `sem: make(chan struct{}, 2)` with a 50ms anti-ban pacing delay.
 - **`parser.go`**: Robust regex parsing extracting Russian title, English/original title, year, season, resolution (4K/1080p), and quality tags (WEB-DL, HDR10, BDRip, etc.).
 - **`matcher.go`**:
   - Correlates releases against `imdb-indexer`'s Tantivy search index (`GET /search?q=...&limit=3`) using an in-run memoization cache (`lookupCache`), minimizing HTTP requests down from 3,000+ to ~250 unique titles.
-  - Clusters all release variants (4K Remux, 1080p WEB-DL, DUB, 720p), sums swarm seeds ($\sum \text{seeds}$) and leeches across all variants, and enriches items with verified IMDb `tconst`, genres, ratings, and poster URLs.
-- **`service.go`**: Background fetcher and persistent bbolt disk cache (`bucket: tracker_hotlist`) with a 2-hour TTL, providing sub-10ms response times.
+  - Clusters all release variants (4K Remux, 1080p WEB-DL, DUB, 720p), sums swarm seeds ($\sum \text{seeds}$) and leeches across all variants, determines precise resolution (`4k`, `1080p`, `720p`, `lq`), and enriches items with verified IMDb `tconst`, genres, ratings, and poster URLs.
+- **`service.go`**: Background fetcher and persistent bbolt disk cache (`bucket: tracker_hotlist`) with a 2-hour TTL:
+  - Supports separate cache keys: `hotlist_movie`, `hotlist_tv`, `hotlist_anime`, `hotlist_doc`.
+  - Supports on-the-fly resolution filtering: when `quality=4k`, returns only titles offering verified 4K UHD torrents.
 - **Endpoints**:
-  - `GET /torrents/hotlist?type=movie|tv&page=1&limit=20` (alias: `GET /api/stream/hotlist`)
+  - `GET /torrents/hotlist?type=movie|tv|anime|doc&quality=4k&page=1&limit=20` (alias: `GET /api/stream/hotlist`)
   - Supports query parameter `?refresh=true` (or `?refresh_cache=true`) to force an immediate background re-scrape.
-  - Returns `{ "id": "tracker_hotlist", "title": "Популярно на трекерах", "media_type": "movie|tv", "page": 1, "total_pages": ..., "total_results": ..., "items": [...] }`.
+  - Returns `{ "id": "tracker_hotlist", "title": "Популярно на трекерах", "media_type": "...", "page": 1, "total_pages": ..., "total_results": ..., "items": [...] }`.
 
 

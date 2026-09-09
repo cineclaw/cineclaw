@@ -108,6 +108,8 @@ Supports instant local metadata generation and asset pre-downloading for Jellyfi
      - **«HBO / Max Originals»** (`hbo_max`): `with_networks=49` / `watch_provider=1899|384`
      - **«Netflix Хиты»** (`netflix`): `with_networks=213` / `watch_provider=8`
      - **«Amazon Prime Video»** (`amazon_prime`): `with_networks=1024` / `watch_provider=119`
+     - **«Аниме & Мультипликация»** (`anime_hub`): `with_genres=16` & `with_original_language=ja`
+     - **«Документальное кино»** (`doc_hub`): `with_genres=99`
    - In-memory cache with 2-hour TTL (`feeds_cache`).
    - `GET /api/feeds/:shelf_id?page=N&type=movie|tv` (alias: `/feeds/:shelf_id`):
      - Fetches page `N` (1-indexed, 20 items per page) for the given `shelf_id` and optional `type` filter.

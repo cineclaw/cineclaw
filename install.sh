@@ -408,6 +408,7 @@ load_config_file() {
             AUTH_ENABLED) current_auth_enabled="$val" ;;
             AUTH_USERNAME|AUTH_USER) current_auth_user="$val" ;;
             AUTH_PASSWORD|AUTH_PASS) current_auth_pass="$val" ;;
+            AUTH_SECRET) current_auth_secret="$val" ;;
         esac
     done < "$cfg"
 }
@@ -431,6 +432,7 @@ configure_environment() {
     local current_auth_enabled="${AUTH_ENABLED:-true}"
     local current_auth_user="${AUTH_USERNAME:-admin}"
     local current_auth_pass="${AUTH_PASSWORD:-wavemp3}"
+    local current_auth_secret="${AUTH_SECRET:-}"
 
     # Priority 1: Specified custom config file (-c / --config)
     if [ -n "$custom_config" ]; then
@@ -548,6 +550,12 @@ configure_environment() {
         [ -n "$input_auth_pass" ] && current_auth_pass="$input_auth_pass"
     fi
 
+    # Generate persistent AUTH_SECRET if not already set
+    if [ -z "$current_auth_secret" ]; then
+        current_auth_secret=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')
+        [ -z "$current_auth_secret" ] && current_auth_secret="cineclaw_secret_$(date +%s%N 2>/dev/null || date +%s)"
+    fi
+
     # Write .env file
     log_info "Writing configuration to $ENV_FILE..."
     cat <<EOF > "$ENV_FILE"
@@ -585,6 +593,7 @@ JELLYFIN_API_KEY=$current_jellyfin_key
 AUTH_ENABLED=$current_auth_enabled
 AUTH_USERNAME=$current_auth_user
 AUTH_PASSWORD=$current_auth_pass
+AUTH_SECRET=$current_auth_secret
 
 # Host Ports
 PORT_FRONTEND=3000
@@ -608,6 +617,7 @@ EOF
     export AUTH_ENABLED="$current_auth_enabled"
     export AUTH_USERNAME="$current_auth_user"
     export AUTH_PASSWORD="$current_auth_pass"
+    export AUTH_SECRET="$current_auth_secret"
     export TZ="$current_tz"
     export PORT_FRONTEND=3000
     export PORT_JELLYFIN=8096

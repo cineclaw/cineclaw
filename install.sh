@@ -131,18 +131,21 @@ Usage:
   ./install.sh [OPTIONS]
 
 Options:
-  -h, --help            Show this help message and exit
-  -y, --non-interactive Run in unattended mode (uses existing .env or defaults)
-  --status              Check health and running status of all containers
-  --restart             Restart the entire Cine-Claw stack
-  --stop                Stop all Cine-Claw containers
-  --update              Pull latest code, rebuild images, and restart
-  --uninstall           Stop containers and remove network (preserves data directory)
+  -h, --help               Show this help message and exit
+  -c, --config <file>      Path to configuration file (e.g. cineclaw.env)
+  -y, -s, --silent,        Run in unattended / silent mode (no interactive prompts)
+      --non-interactive
+  --status                 Check health and running status of all containers
+  --restart                Restart the entire CineClaw stack
+  --stop                   Stop all CineClaw containers
+  --update                 Pull latest code, compose files, and containers
+  --uninstall              Stop containers and remove network (preserves data directory)
 
 Examples:
-  ./install.sh                  # Interactive setup and startup
-  ./install.sh --non-interactive # Quick start with defaults
-  ./install.sh --status         # Check system health
+  ./install.sh                                 # Interactive setup wizard
+  ./install.sh -c cineclaw.env                 # Silent install from short config file
+  ./install.sh -y                              # Unattended with defaults / auto-detected IP
+  TMDB_API_KEY="xxx" ./install.sh -y           # Silent install with inline key
 EOF
 }
 
@@ -369,47 +372,79 @@ check_prerequisites() {
 # ------------------------------------------------------------------------------
 # Interactive Configuration Prompting
 # ------------------------------------------------------------------------------
+load_config_file() {
+    local cfg="$1"
+    [ ! -f "$cfg" ] && return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Trim leading/trailing whitespace
+        line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        # Skip empty lines and comments
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+        
+        local key="" val=""
+        if [[ "$line" =~ ^([A-Za-z0-9_]+)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            val="${BASH_REMATCH[2]}"
+        elif [[ "$line" =~ ^([A-Za-z0-9_]+)[[:space:]]*:[[:space:]]*(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            val="${BASH_REMATCH[2]}"
+        else
+            continue
+        fi
+        # Remove surrounding quotes
+        val=$(echo "$val" | sed -e 's/^["'\'']//' -e 's/["'\'']$//' | xargs)
+        local key_upper
+        key_upper=$(echo "$key" | tr '[:lower:]' '[:upper:]')
+        case "$key_upper" in
+            DATA_DIR) current_data_dir="$val" ;;
+            NAS_IP) current_nas_ip="$val" ;;
+            TMDB_API_KEY) current_tmdb_key="$val" ;;
+            RUTRACKER_USERNAME|RUTRACKER_USER) current_rutracker_user="$val" ;;
+            RUTRACKER_PASSWORD|RUTRACKER_PASS) current_rutracker_pass="$val" ;;
+            NNMCLUB_USERNAME|NNMCLUB_USER) current_nnmclub_user="$val" ;;
+            NNMCLUB_PASSWORD|NNMCLUB_PASS) current_nnmclub_pass="$val" ;;
+            TZ|TIMEZONE) current_tz="$val" ;;
+            JELLYFIN_API_KEY) current_jellyfin_key="$val" ;;
+        esac
+    done < "$cfg"
+}
+
 configure_environment() {
     local non_interactive="$1"
+    local custom_config="${2:-}"
 
     log_step "Configuration Setup"
 
-    # Default values or values loaded from existing .env
-    local current_data_dir="./data"
-    local current_nas_ip
-    current_nas_ip=$(detect_lan_ip)
-    local current_tmdb_key=""
-    local current_rutracker_user=""
-    local current_rutracker_pass=""
-    local current_nnmclub_user=""
-    local current_nnmclub_pass=""
-    local current_tz="Europe/Moscow"
-    local current_jellyfin_key="a4151fee9ef64ea6b23b185f8fe2720e"
+    # Default values or values pre-set in shell environment
+    local current_data_dir="${DATA_DIR:-./data}"
+    local current_nas_ip="${NAS_IP:-$(detect_lan_ip)}"
+    local current_tmdb_key="${TMDB_API_KEY:-}"
+    local current_rutracker_user="${RUTRACKER_USERNAME:-}"
+    local current_rutracker_pass="${RUTRACKER_PASSWORD:-}"
+    local current_nnmclub_user="${NNMCLUB_USERNAME:-}"
+    local current_nnmclub_pass="${NNMCLUB_PASSWORD:-}"
+    local current_tz="${TZ:-Europe/Moscow}"
+    local current_jellyfin_key="${JELLYFIN_API_KEY:-a4151fee9ef64ea6b23b185f8fe2720e}"
 
-    # Load existing .env if present
-    if [ -f "$ENV_FILE" ]; then
+    # Priority 1: Specified custom config file (-c / --config)
+    if [ -n "$custom_config" ]; then
+        if [ -f "$custom_config" ]; then
+            log_info "Loading configuration from $custom_config..."
+            load_config_file "$custom_config"
+        else
+            log_err "Configuration file not found: $custom_config"
+            exit 1
+        fi
+    # Priority 2: Short cineclaw.env in working directory
+    elif [ -f "$SCRIPT_DIR/cineclaw.env" ]; then
+        log_info "Loading configuration from cineclaw.env..."
+        load_config_file "$SCRIPT_DIR/cineclaw.env"
+    # Priority 3: Existing .env in working directory
+    elif [ -f "$ENV_FILE" ]; then
         log_info "Found existing configuration in .env"
-        # Source safely
-        while IFS='=' read -r key val || [ -n "$key" ]; do
-            # Skip comments and empty lines
-            [[ "$key" =~ ^[[:space:]]*# ]] && continue
-            [[ -z "$key" ]] && continue
-            key=$(echo "$key" | xargs)
-            val=$(echo "$val" | xargs)
-            case "$key" in
-                DATA_DIR) current_data_dir="$val" ;;
-                NAS_IP) current_nas_ip="$val" ;;
-                TMDB_API_KEY) current_tmdb_key="$val" ;;
-                RUTRACKER_USERNAME) current_rutracker_user="$val" ;;
-                RUTRACKER_PASSWORD) current_rutracker_pass="$val" ;;
-                NNMCLUB_USERNAME) current_nnmclub_user="$val" ;;
-                NNMCLUB_PASSWORD) current_nnmclub_pass="$val" ;;
-                TZ) current_tz="$val" ;;
-                JELLYFIN_API_KEY) current_jellyfin_key="$val" ;;
-            esac
-        done < "$ENV_FILE"
+        load_config_file "$ENV_FILE"
+    # Priority 4: Fallback default config in imdb-indexer/config.yaml
     elif [ -f "imdb-indexer/config.yaml" ]; then
-        # Check if default key is in config.yaml
         local found_key
         found_key=$(grep -E '^[[:space:]]*api_key:' imdb-indexer/config.yaml | head -n1 | awk '{print $2}' | tr -d '"' || true)
         if [ -n "$found_key" ] && [ "$found_key" != '""' ]; then
@@ -418,7 +453,10 @@ configure_environment() {
     fi
 
     if [ "$non_interactive" = "true" ]; then
-        log_info "Non-interactive mode requested: using existing or default configuration."
+        log_info "Unattended mode: applying configuration without interactive prompts."
+        if [ -z "$current_tmdb_key" ]; then
+            log_warn "TMDB_API_KEY is not set. Posters and rich metadata will be unavailable until added to .env."
+        fi
     else
         echo -e "${BOLD}Answer the following questions to configure your Cine-Claw installation.${NC}"
         echo -e "${DIM}(Press [Enter] to accept the suggested default in brackets)${NC}\n"
@@ -722,6 +760,7 @@ print_summary() {
 # ------------------------------------------------------------------------------
 main() {
     local non_interactive=false
+    local custom_config=""
 
     # Parse CLI Arguments
     while [ $# -gt 0 ]; do
@@ -730,7 +769,16 @@ main() {
                 show_help
                 exit 0
                 ;;
-            -y|--non-interactive)
+            -c|--config)
+                if [ $# -lt 2 ]; then
+                    log_err "Missing argument for $1"
+                    exit 1
+                fi
+                custom_config="$2"
+                non_interactive=true
+                shift 2
+                ;;
+            -y|-s|--silent|--non-interactive)
                 non_interactive=true
                 shift
                 ;;
@@ -776,7 +824,7 @@ BANNER
 
     ensure_runtime_files
     check_prerequisites
-    configure_environment "$non_interactive"
+    configure_environment "$non_interactive" "$custom_config"
     initialize_directories
     deploy_containers
     print_summary

@@ -35,11 +35,35 @@ chmod +x install.sh && ./install.sh
 4. **Готовые контейнеры**: скачивает официальные Docker-образы из `ghcr.io/cineclaw/*` без компиляции на хосте.
 5. **Интеграция с Jellyfin**: запускает стек и автоматически настраивает вебхуки приоритетного FUSE-стриминга.
 
-> **Автоматический запуск (Unattended / headless):**  
-> Если переменные окружения уже заданы в `.env`:
-> ```bash
-> ./install.sh --non-interactive
-> ```
+### Бесшумная (неинтерактивная) установка из короткого конфига
+
+Для автоматического развёртывания (например, в скриптах автоматизации, Ansible или без ручного ввода) достаточно создать минимальный файл `cineclaw.env` всего с одной обязательной строкой:
+
+```bash
+# 1. Создать минимальный конфиг
+cat << 'EOF' > cineclaw.env
+TMDB_API_KEY=your_tmdb_api_key_here
+DATA_DIR=/volume1/media/cineclaw
+EOF
+
+# 2. Запустить тихую установку (без диалогов и вопросов):
+./install.sh -c cineclaw.env
+```
+
+*Либо в одну команду через curl с инлайн-ключом:*
+```bash
+curl -fsSL https://raw.githubusercontent.com/cineclaw/cineclaw/main/install.sh | TMDB_API_KEY="your_api_key" bash -s -- -y
+```
+
+#### Параметры короткого конфига (`cineclaw.env`):
+| Переменная | Описание | Значение по умолчанию |
+| :--- | :--- | :--- |
+| `TMDB_API_KEY` | Ключ TMDB API ([получить бесплатно](https://www.themoviedb.org/settings/api)) | *рекомендуется для постеров и сезонов* |
+| `DATA_DIR` | Каталог хранения индексов, постеров и FUSE-заглушек | `./data` |
+| `NAS_IP` | Локальный IP-адрес или домен хоста | *авто-определение шлюза сети* |
+| `TZ` | Часовой пояс контейнеров | `Europe/Moscow` |
+| `RUTRACKER_USERNAME` / `PASSWORD` | Учётная запись RuTracker (опционально) | *RuTor работает без аккаунта* |
+| `NNMCLUB_USERNAME` / `PASSWORD` | Учётная запись NNM-Club (опционально) | - |
 
 ---
 

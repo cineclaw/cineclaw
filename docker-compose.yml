@@ -10,6 +10,7 @@ services:
     depends_on:
       - imdb-indexer
       - tracker-proxy
+      - cineclaw-ai
     networks:
       - cineclaw-net
 
@@ -64,6 +65,26 @@ services:
       - tiramisu
       - jellyfin
       - imdb-indexer
+    networks:
+      - cineclaw-net
+
+  cineclaw-ai:
+    image: ghcr.io/cineclaw/cineclaw-ai:${IMAGE_TAG:-latest}
+    container_name: cineclaw-ai
+    restart: unless-stopped
+    ports:
+      - "${PORT_AI:-9120}:9120"
+    volumes:
+      - ${DATA_DIR:-./data}/cineclaw-ai:/data/cineclaw-ai
+    environment:
+      - PORT=9120
+      - DATA_DIR=/data/cineclaw-ai
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OMDB_API_KEY=${OMDB_API_KEY:-}
+      - TMDB_API_KEY=${TMDB_API_KEY:-db85bce5bf5bf9bac3c140447bf5ac5d}
+      - AI_SUMMARY_MODEL=${AI_SUMMARY_MODEL:-google/gemini-2.5-flash}
+      - AI_COMPACT_MODEL=${AI_COMPACT_MODEL:-google/gemini-2.5-flash-lite}
+      - AI_AGENT_MODEL=${AI_AGENT_MODEL:-google/gemini-2.5-flash}
     networks:
       - cineclaw-net
 

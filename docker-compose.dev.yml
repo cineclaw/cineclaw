@@ -16,7 +16,13 @@ services:
       context: ./tracker-proxy
     image: cineclaw-tracker-proxy:dev
 
+  cineclaw-ai:
+    build:
+      context: ./cineclaw-ai
+    image: cineclaw-ai:dev
+
   jellyfin:
     build:
       context: ./jellyfin
     image: cineclaw-jellyfin:dev
+

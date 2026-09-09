@@ -50,8 +50,21 @@ graph TD
         Proxy -.->|Magnet| Lodestarr
     end
 
+    subgraph AI & Critic Intelligence
+        CineClawAI["cineclaw-ai (Port 9120 - Go)"]
+        OMDb["OMDb API (RT, Metacritic, Awards)"]
+        OpenRouter["OpenRouter (Gemini 2.5 Flash)"]
+        AIBBolt[("bbolt Cache (critic_summaries)")]
+
+        CineClawAI --> OMDb
+        CineClawAI --> TMDB
+        CineClawAI --> OpenRouter
+        CineClawAI --> AIBBolt
+    end
+
     Gateway -->|Authorized /search, /poster| IMDb
     Gateway -->|Authorized /torrents, /series, /api/*| Proxy
+    Gateway -->|Authorized /api/ai/*| CineClawAI
     Client -->|Watch Stream / Browse Library| Jellyfin
     Client -->|Direct Magnet Click| Transmission["Local Torrent Client (e.g. Transmission)"]
 ```
@@ -108,6 +121,21 @@ graph TD
 5. Jellyfin scans the newly mounted media. A smart `ffprobe` wrapper inside the Jellyfin container caches stream signatures per series/season, reducing 86-episode media probes from 20 minutes to under 3 seconds!
 6. All seasons and episodes appear instantly with full metadata, ready for immediate playback.
 
+### Step 7: AI Critics Consensus & Scores Aggregation
+1. When opening a movie/series modal on Frontend, `useGetCriticSummaryQuery(tconst)` requests `GET /api/ai/critics/:tconst` through Nginx.
+2. `cineclaw-ai` (`pkg/critics/engine.go`):
+   - Checks local persistent bbolt database (`critic_summaries` bucket). On cache hit, returns JSON in 0ms.
+   - On cache miss, concurrently queries:
+     - **OMDb API**: Rotten Tomatoes Tomatometer %, Metascore (0-100), IMDb User Rating & Votes, and Awards statement.
+     - **TMDB API**: Top 5 critical & audience reviews.
+   - Synthesizes an executive consensus via OpenRouter LLM (`google/gemini-2.5-flash`):
+     - Tone classification (`strongly_positive`, `positive`, `mixed`, `negative`).
+     - Concise 2-sentence Russian verdict.
+     - Bullet points of top strengths (pros) and weaknesses (cons).
+     - Target audience recommendation («Кому понравится»).
+   - Saves result into bbolt cache and returns payload to Frontend.
+3. Frontend renders responsive obsidian badges for RT %, Metascore, IMDb, and awards, alongside the expandable AI Consensus card.
+
 ---
 
 ## 3. Communication Protocols & Inter-Service Contracts
@@ -120,6 +148,10 @@ graph TD
 | `frontend` | `tracker-proxy` | `GET /api/torrents?...` | Aggregated & deduped torrents |
 | `frontend` | `tracker-proxy` | `POST /api/torrents/refresh` | Invalidate cache & re-fetch |
 | `frontend` | `tracker-proxy` | `POST /api/stream/mount` | Mount torrent into Tiramisu & Jellyfin |
+| `frontend` | `cineclaw-ai` | `GET /api/ai/critics/:tconst` | Rotten Tomatoes %, Metascore, awards & AI consensus |
+| `cineclaw-ai` | OMDb | `GET /?i=:tconst&apikey=...` | Critic scores, ratings, and awards |
+| `cineclaw-ai` | TMDB | `GET /3/find/:tconst` & `/3/:type/:id/reviews` | Reviews context for LLM |
+| `cineclaw-ai` | OpenRouter | `POST /api/v1/chat/completions` | Structured AI critique synthesis (Gemini 2.5 Flash) |
 | `tracker-proxy` | `imdb-indexer` | `GET /series/:tconst/episodes` | Fetch episode titles & plots for NFO generation |
 | `tracker-proxy` | `flaresolverr` | `POST /v1` | FlareSolverr Turnstile clearance |
 | `tracker-proxy` | Trackers | HTTP GET / POST | Scrapes RuTracker, RuTor, NNM-Club |
@@ -173,6 +205,7 @@ graph TD
         Net --> FE["frontend (Nginx :3000)"]
         Net --> Idx["imdb-indexer (:8090)"]
         Net --> Prx["tracker-proxy (:9118)"]
+        Net --> AI["cineclaw-ai (:9120)"]
         Net --> Trm["tiramisu (:9080, :8092)"]
         Net --> Jlf["jellyfin (:8096)"]
         Net --> Flr["flaresolverr (:8191)"]
@@ -188,8 +221,9 @@ graph TD
 ```
 
 ### Production Docker Containers
-- **`frontend` (`frontend/Dockerfile`)**: Multi-stage build (`node:22-alpine` builder $\to$ `nginx:alpine` runtime). Nginx serves the compiled React 19 PWA and reverse-proxies `/search`, `/poster`, `/status`, `/api`, `/series` to `http://imdb-indexer:8090` and `/torrents` to `http://tracker-proxy:9118`. PWA fallback is handled cleanly with `try_files $uri $uri/ /index.html`.
+- **`frontend` (`frontend/Dockerfile`)**: Multi-stage build (`node:22-alpine` builder $\to$ `nginx:alpine` runtime). Nginx serves the compiled React 19 PWA and reverse-proxies `/search`, `/poster`, `/status`, `/api`, `/series` to `http://imdb-indexer:8090`, `/torrents` to `http://tracker-proxy:9118`, and `/api/ai` to `http://cineclaw-ai:9120`. PWA fallback is handled cleanly with `try_files $uri $uri/ /index.html`.
 - **`imdb-indexer` (`imdb-indexer/Dockerfile`)**: Multi-stage build (`rust:1.85-bookworm` builder $\to$ `debian:bookworm-slim` minimal runtime). Mounts persistent data directory for Tantivy indices (`/data/indices`), downloads (`/data/downloads`), and posters (`/data/posters`). Reads `TMDB_API_KEY` from container environment.
+- **`cineclaw-ai` (`cineclaw-ai/Dockerfile`)**: Multi-stage build (`golang:alpine` builder $\to$ `alpine:latest` minimal runtime). Fast and low-memory (~15-25MB RSS). Connects to OMDb, TMDB, and OpenRouter, stores responses in persistent embedded bbolt database (`/data/cineclaw-ai/ai_store.db`).
 
 ### FUSE Mount & Shared Storage Model
 - **Tiramisu** runs with `cap_add: SYS_ADMIN`, `devices: [/dev/fuse]`, and `security_opt: [apparmor:unconfined]`.

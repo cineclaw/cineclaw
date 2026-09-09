@@ -110,7 +110,19 @@ publish-frontend: check-builder ## Build and push frontend to GHCR (amd64 + arm6
 		./frontend
 	@echo -e "$(GREEN)✓ Published $(REGISTRY)/frontend:$(VERSION) and :latest$(NC)"
 
-publish-all: publish-frontend publish-tracker publish-indexer ## Build and push all services to GHCR
+publish-ai: check-builder ## Build and push cineclaw-ai to GHCR (amd64 + arm64)
+	@echo -e "$(CYAN)Building and pushing $(REGISTRY)/cineclaw-ai:$(VERSION) ($(PLATFORMS))...$(NC)"
+	docker buildx build \
+		--platform $(PLATFORMS) \
+		--cache-from type=registry,ref=$(REGISTRY)/cineclaw-ai:latest \
+		--build-arg VERSION=$(VERSION) \
+		-t $(REGISTRY)/cineclaw-ai:$(VERSION) \
+		-t $(REGISTRY)/cineclaw-ai:latest \
+		--push \
+		./cineclaw-ai
+	@echo -e "$(GREEN)✓ Published $(REGISTRY)/cineclaw-ai:$(VERSION) and :latest$(NC)"
+
+publish-all: publish-frontend publish-tracker publish-indexer publish-ai ## Build and push all services to GHCR
 	@echo -e "$(GREEN)========================================================$(NC)"
 	@echo -e "$(GREEN)✓ All CineClaw $(VERSION) microservices successfully published to GHCR$(NC)"
 	@echo -e "$(GREEN)========================================================$(NC)"
@@ -137,6 +149,15 @@ build-tracker-local: check-builder ## Fast local build for host architecture wit
 		-t $(REGISTRY)/tracker-proxy:latest \
 		./tracker-proxy
 
+build-ai-local: check-builder ## Fast local build for host architecture with persistent cache
+	@echo -e "$(CYAN)Building cineclaw-ai for host architecture...$(NC)"
+	docker buildx build \
+		--load \
+		--build-arg VERSION=$(VERSION) \
+		-t $(REGISTRY)/cineclaw-ai:$(VERSION) \
+		-t $(REGISTRY)/cineclaw-ai:latest \
+		./cineclaw-ai
+
 build-frontend-local: check-builder ## Fast local build for host architecture with persistent cache
 	@echo -e "$(CYAN)Building frontend for host architecture...$(NC)"
 	docker buildx build \
@@ -146,7 +167,7 @@ build-frontend-local: check-builder ## Fast local build for host architecture wi
 		-t $(REGISTRY)/frontend:latest \
 		./frontend
 
-build-local: build-frontend-local build-tracker-local build-indexer-local ## Build all services for host architecture
+build-local: build-frontend-local build-tracker-local build-indexer-local build-ai-local ## Build all services for host architecture
 
 # ------------------------------------------------------------------------------
 # Operations & Orchestration

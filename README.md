@@ -138,6 +138,29 @@ cd imdb-indexer && cargo run --release
 cd tracker-proxy && go run ./cmd/server
 ```
 
+## Сборка и публикация multi-arch Docker-образов (`Makefile`)
+
+Для быстрой сборки и публикации образов в `ghcr.io/cineclaw/*` без ожидания облачных CI-раннеров в корне репозитория предусмотрен `Makefile`:
+
+```bash
+# Просмотр всех доступных команд
+make help
+
+# Авторизация в GHCR через токен gh CLI
+make login
+
+# Сборка и публикация всех микросервисов (linux/amd64 + linux/arm64)
+make publish-all VERSION=1.0.0
+
+# Сборка и публикация отдельных компонентов:
+make publish-indexer VERSION=1.0.0   # Поисковый Tantivy-движок (Rust)
+make publish-tracker VERSION=1.0.0   # Агрегатор трекеров (Go)
+make publish-frontend VERSION=1.0.0  # Nginx + SPA веб-интерфейс
+
+# Локальная быстрая сборка под текущую архитектуру (без multi-arch):
+make build-local
+```
+
 ---
 
 ## Лицензия

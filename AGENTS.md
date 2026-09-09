@@ -1,11 +1,11 @@
-# Cine-Claw v2 — Agent Guide (`AGENTS.md`)
+# CineClaw (v1) — Agent Guide (`AGENTS.md`)
 
 > **Note for AI Agents**: This file is your operational entry point. Keep it token-efficient (~150 lines). For subsystem-specific deep dives, refer to the documents linked in the [Documentation Map](#6-documentation-map) below instead of loading everything at once.
 
 ---
 
 ## 1. Project Vision & Mental Model
-**Cine-Claw v2** is an evolving, extensible self-hosted home cinema and media platform. It bridges metadata discovery, torrent indexing, transparent de-duplication, and on-demand streaming.
+**CineClaw** is an evolving, extensible self-hosted home cinema and media platform. It bridges metadata discovery, torrent indexing, transparent de-duplication, and on-demand streaming.
 - **Current Core**: Fast IMDb Tantivy search, multi-tracker aggregator (RuTracker, RuTor, NNM-Club), intelligent cross-tracker deduplication, modern React cinema UI, and **instant one-click streaming** via Tiramisu FUSE torrent mounting directly into Jellyfin.
 - **Active Roadmap**: Intelligent cache retention/cleanup, subtitle synchronization, and web-player deep linking.
 
@@ -15,35 +15,36 @@
 
 | Service | Stack | Port | Execution Mode | Role |
 | :--- | :--- | :--- | :--- | :--- |
-| **`imdb-indexer`** | Rust 2021 (Axum, Tantivy, redb) | `8090` | Local Daemon / Binary | IMDb title search, TMDB seasons, poster proxy |
-| **`tracker-proxy`** | Go 1.25 (bbolt, goquery) | `9118` | Docker Container | Multi-tracker scraper, dedup, FUSE mount orchestrator |
-| **`flaresolverr`** | Node/Chromium | `8191` | Docker Container | Cloudflare Turnstile clearance for RuTracker |
-| **`frontend`** | React 19, Vite 8, RTK Query, Tailwind | `3000` | Local Dev Server | Dark cinema UI, client-side filters, 1-click playback |
-| **`lodestarr`** | Rust | `3420` | Docker Container | Torrent downloader daemon |
-| **`jellyfin`** | C# / .NET | `8096` | Docker Container | Media server & playback target |
-| **`tiramisu`** | Go FUSE / GoStorm | `9080`, `8092` | Docker Container | FUSE virtual torrent streaming engine |
+| **`imdb-indexer`** | Rust 2021 (Axum, Tantivy, redb) | `8090` | Docker / GHCR (`ghcr.io/cineclaw/imdb-indexer`) | IMDb title search, TMDB seasons, poster proxy |
+| **`tracker-proxy`** | Go 1.25 (bbolt, goquery) | `9118` | Docker / GHCR (`ghcr.io/cineclaw/tracker-proxy`) | Multi-tracker scraper, dedup, FUSE mount orchestrator |
+| **`flaresolverr`** | Node/Chromium | `8191` | Docker Container (`v3.5.0`) | Cloudflare Turnstile clearance for RuTracker |
+| **`frontend`** | React 19, Vite 8, RTK Query, Tailwind | `3000` | Docker / GHCR (`ghcr.io/cineclaw/frontend`) | Dark cinema UI, client-side filters, 1-click playback |
+| **`lodestarr`** | Rust | `3420` | Docker Container (`master`) | Torrent downloader daemon |
+| **`jellyfin`** | C# / .NET | `8096` | Docker Container (`10.11.11`) | Media server & playback target |
+| **`tiramisu`** | Go FUSE / GoStorm | `9080`, `8092` | Docker Container (`v1.9.59`) | FUSE virtual torrent streaming engine |
 
 ---
 
 ## 3. Operations Cheatsheet
 
-### Backend (`tracker-proxy` - Go)
+### Multi-Arch Building & GHCR Publishing (`Makefile`)
 ```bash
-# Rebuild and restart container after modifying Go code
-docker compose up -d --build tracker-proxy
+# Build and publish all 3 microservices to GHCR (amd64 + arm64)
+make publish-all VERSION=1.0.0
 
-# View live proxy logs
-docker compose logs -f tracker-proxy
+# Build and publish individual service
+make publish-indexer VERSION=1.0.0
+make publish-tracker VERSION=1.0.0
+make publish-frontend VERSION=1.0.0
+
+# Fast local builds for host architecture
+make build-local
 ```
 
-### Indexer (`imdb-indexer` - Rust)
+### Local Dev Overrides
 ```bash
-cd imdb-indexer
-# Always compile release mode (Tantivy is 10x slower in debug)
-cargo build --release
-
-# Run indexer daemon (indexes data/ and listens on :8090)
-./target/release/imdb-indexer
+# Start with local source builds
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 ```
 
 ### Frontend (`frontend` - Vite / React 19)

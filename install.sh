@@ -40,21 +40,92 @@ log_warn()    { echo -e "${YELLOW}⚠  $*${NC}"; }
 log_err()     { echo -e "${RED}✖  $*${NC}" >&2; }
 log_step()    { echo -e "\n${BOLD}${BLUE}==>${NC} ${BOLD}$*${NC}"; }
 
+# Safe user prompts (supporting terminal pipes, e.g. curl ... | bash)
+prompt_read() {
+    local prompt_msg="$1"
+    local var_name="$2"
+    local input_val=""
+    if [ -t 0 ]; then
+        read -rp "$prompt_msg" input_val
+    elif [ -e /dev/tty ]; then
+        read -rp "$prompt_msg" input_val </dev/tty
+    else
+        input_val=""
+    fi
+    eval "$var_name=\"\$input_val\""
+}
+
+prompt_read_secret() {
+    local prompt_msg="$1"
+    local var_name="$2"
+    local input_val=""
+    if [ -t 0 ]; then
+        read -rsp "$prompt_msg" input_val
+    elif [ -e /dev/tty ]; then
+        read -rsp "$prompt_msg" input_val </dev/tty
+    else
+        input_val=""
+    fi
+    echo ""
+    eval "$var_name=\"\$input_val\""
+}
+
 # ------------------------------------------------------------------------------
-# Root and Directory Resolution
+# Root and Directory Resolution (Git-Independent)
 # ------------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    SCRIPT_DIR="$(pwd)"
+fi
 cd "$SCRIPT_DIR"
 
 ENV_FILE="$SCRIPT_DIR/.env"
 ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
+
+ensure_runtime_files() {
+    # 1. Self-preservation: save install.sh to working directory if running from pipe
+    if [ ! -f "$SCRIPT_DIR/install.sh" ]; then
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL "https://raw.githubusercontent.com/cineclaw/cineclaw/main/install.sh" -o "$SCRIPT_DIR/install.sh" 2>/dev/null || true
+            chmod +x "$SCRIPT_DIR/install.sh" 2>/dev/null || true
+        elif command -v wget >/dev/null 2>&1; then
+            wget -qO "$SCRIPT_DIR/install.sh" "https://raw.githubusercontent.com/cineclaw/cineclaw/main/install.sh" 2>/dev/null || true
+            chmod +x "$SCRIPT_DIR/install.sh" 2>/dev/null || true
+        fi
+    fi
+
+    # 2. docker-compose.yml
+    if [ ! -f "$SCRIPT_DIR/docker-compose.yml" ]; then
+        log_info "Downloading official docker-compose.yml from GitHub..."
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL "https://raw.githubusercontent.com/cineclaw/cineclaw/main/docker-compose.yml" -o "$SCRIPT_DIR/docker-compose.yml"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -qO "$SCRIPT_DIR/docker-compose.yml" "https://raw.githubusercontent.com/cineclaw/cineclaw/main/docker-compose.yml"
+        else
+            log_err "Neither curl nor wget found to download docker-compose.yml"
+            exit 1
+        fi
+    fi
+
+    # 3. scripts/setup-jellyfin-webhook.sh
+    if [ ! -f "$SCRIPT_DIR/scripts/setup-jellyfin-webhook.sh" ]; then
+        mkdir -p "$SCRIPT_DIR/scripts"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL "https://raw.githubusercontent.com/cineclaw/cineclaw/main/scripts/setup-jellyfin-webhook.sh" -o "$SCRIPT_DIR/scripts/setup-jellyfin-webhook.sh" 2>/dev/null || true
+        elif command -v wget >/dev/null 2>&1; then
+            wget -qO "$SCRIPT_DIR/scripts/setup-jellyfin-webhook.sh" "https://raw.githubusercontent.com/cineclaw/cineclaw/main/scripts/setup-jellyfin-webhook.sh" 2>/dev/null || true
+        fi
+        chmod +x "$SCRIPT_DIR/scripts/setup-jellyfin-webhook.sh" 2>/dev/null || true
+    fi
+}
 
 # ------------------------------------------------------------------------------
 # Usage / Help
 # ------------------------------------------------------------------------------
 show_help() {
     cat <<EOF
-${BOLD}Cine-Claw v2 Universal Installer${NC}
+${BOLD}CineClaw (v1) Universal Installer${NC}
 
 Usage:
   ./install.sh [OPTIONS]
@@ -170,24 +241,33 @@ cmd_update() {
     detect_compose_cmd
     log_step "Updating CineClaw"
     if [ -d ".git" ]; then
-        log_info "Pulling latest git changes..."
-        git pull --ff-only || log_warn "Git pull failed or branch has diverged."
-        git submodule update --init --recursive 2>/dev/null || true
+        log_info "Updating git repository..."
+        git pull --ff-only 2>/dev/null || log_warn "Git pull skipped or repository diverged."
+    else
+        log_info "Updating scripts and configuration files from GitHub..."
+        ensure_runtime_files
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL "https://raw.githubusercontent.com/cineclaw/cineclaw/main/docker-compose.yml" -o "$SCRIPT_DIR/docker-compose.yml" 2>/dev/null || true
+            curl -fsSL "https://raw.githubusercontent.com/cineclaw/cineclaw/main/install.sh" -o "$SCRIPT_DIR/install.sh" 2>/dev/null || true
+            chmod +x "$SCRIPT_DIR/install.sh" 2>/dev/null || true
+        fi
     fi
-    log_info "Pulling latest container images..."
+    log_info "Pulling latest pre-built container images from GHCR..."
     $COMPOSE_CMD pull
+    log_info "Restarting CineClaw stack..."
     $COMPOSE_CMD up -d
-    log_ok "CineClaw updated and running."
+    log_ok "CineClaw has been updated to the latest version."
 }
 
 cmd_uninstall() {
     detect_compose_cmd
-    echo -e "${YELLOW}${BOLD}WARNING:${NC} This will stop and remove all Cine-Claw containers and networks."
+    echo -e "${YELLOW}${BOLD}WARNING:${NC} This will stop and remove all CineClaw containers and networks."
     echo -e "Your data directory (${DATA_DIR:-./data}) with torrents, indices and configs will ${BOLD}NOT${NC} be deleted."
-    read -rp "Are you sure you want to proceed? [y/N]: " confirm
+    local confirm=""
+    prompt_read "Are you sure you want to proceed? [y/N]: " confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
         $COMPOSE_CMD down --remove-orphans
-        log_ok "Cine-Claw stack removed."
+        log_ok "CineClaw stack removed."
     else
         log_info "Uninstall aborted."
     fi
@@ -346,7 +426,7 @@ configure_environment() {
         # 1. NAS IP / Domain
         echo -e "${BOLD}1. NAS Host IP or Domain${NC}"
         echo -e "   This address is used by external devices (TVs, phones, laptops) to stream from Jellyfin."
-        read -rp "   Host IP or Domain [$current_nas_ip]: " input_nas_ip
+        prompt_read "   Host IP or Domain [$current_nas_ip]: " input_nas_ip
         if [ -n "$input_nas_ip" ]; then
             current_nas_ip="$input_nas_ip"
         fi
@@ -355,7 +435,7 @@ configure_environment() {
         echo -e "\n${BOLD}2. Persistent Data Directory${NC}"
         echo -e "   Directory for Tantivy search indices, poster cache, and virtual FUSE mount stubs."
         echo -e "   ${DIM}On Synology/TrueNAS: e.g. /volume1/docker/cine-claw/data or /mnt/tank/cineclaw${NC}"
-        read -rp "   Data directory path [$current_data_dir]: " input_data_dir
+        prompt_read "   Data directory path [$current_data_dir]: " input_data_dir
         if [ -n "$input_data_dir" ]; then
             current_data_dir="$input_data_dir"
         fi
@@ -374,7 +454,7 @@ configure_environment() {
         fi
 
         while true; do
-            read -rp "$tmdb_prompt" input_tmdb
+            prompt_read "$tmdb_prompt" input_tmdb
             if [ -n "$input_tmdb" ]; then
                 current_tmdb_key="$(echo "$input_tmdb" | xargs)"
                 break
@@ -383,7 +463,7 @@ configure_environment() {
                 break
             else
                 log_warn "TMDB API key is strongly recommended for metadata and posters."
-                read -rp "   Do you wish to continue without a TMDB API Key? [y/N]: " skip_tmdb
+                prompt_read "   Do you wish to continue without a TMDB API Key? [y/N]: " skip_tmdb
                 if [[ "$skip_tmdb" =~ ^[Yy]$ ]]; then
                     break
                 fi
@@ -395,26 +475,24 @@ configure_environment() {
         echo -e "   RuTor works out-of-the-box without an account."
         echo -e "   You can optionally configure RuTracker or NNM-Club accounts for private search."
         
-        read -rp "   Configure RuTracker account? [y/N]: " config_rutracker
+        prompt_read "   Configure RuTracker account? [y/N]: " config_rutracker
         if [[ "$config_rutracker" =~ ^[Yy]$ ]]; then
-            read -rp "     RuTracker Username [$current_rutracker_user]: " input_ru_user
+            prompt_read "     RuTracker Username [$current_rutracker_user]: " input_ru_user
             [ -n "$input_ru_user" ] && current_rutracker_user="$input_ru_user"
-            read -rsp "     RuTracker Password: " input_ru_pass
-            echo ""
+            prompt_read_secret "     RuTracker Password: " input_ru_pass
             [ -n "$input_ru_pass" ] && current_rutracker_pass="$input_ru_pass"
         fi
 
-        read -rp "   Configure NNM-Club account? [y/N]: " config_nnm
+        prompt_read "   Configure NNM-Club account? [y/N]: " config_nnm
         if [[ "$config_nnm" =~ ^[Yy]$ ]]; then
-            read -rp "     NNM-Club Username [$current_nnmclub_user]: " input_nnm_user
+            prompt_read "     NNM-Club Username [$current_nnmclub_user]: " input_nnm_user
             [ -n "$input_nnm_user" ] && current_nnmclub_user="$input_nnm_user"
-            read -rsp "     NNM-Club Password: " input_nnm_pass
-            echo ""
+            prompt_read_secret "     NNM-Club Password: " input_nnm_pass
             [ -n "$input_nnm_pass" ] && current_nnmclub_pass="$input_nnm_pass"
         fi
 
         # 5. Timezone
-        read -rp "   Timezone [$current_tz]: " input_tz
+        prompt_read "   Timezone [$current_tz]: " input_tz
         [ -n "$input_tz" ] && current_tz="$input_tz"
     fi
 
@@ -696,6 +774,7 @@ main() {
 BANNER
     echo -e "${NC}"
 
+    ensure_runtime_files
     check_prerequisites
     configure_environment "$non_interactive"
     initialize_directories
@@ -703,6 +782,4 @@ BANNER
     print_summary
 }
 
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+main "$@"

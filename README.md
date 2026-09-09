@@ -107,16 +107,16 @@ graph TD
         Lds["lodestarr (:3420)<br/>Торрент-клиент демон"]
     end
 
-    Client -->|Web UI / PWA :3000| FE
-    Client -->|Воспроизведение :8096| Jlf
+    Client -->|"Web UI / PWA :3000"| FE
+    Client -->|"Воспроизведение :8096"| Jlf
     
-    FE -->|/search, /poster, /feeds, /person| Idx
-    FE -->|/torrents, /stream| Prx
-    Prx -->|RuTracker| Flare
-    Prx -->|VFS JSON stubs| Trm
-    Trm -->|/media/virtual (rshared)| Jlf
-    Jlf -->|Priority Mode Webhook| Trm
-    Jlf -->|ItemDeleted Webhook| Prx
+    FE -->|"/search, /poster, /feeds, /person"| Idx
+    FE -->|"/torrents, /stream"| Prx
+    Prx -->|"RuTracker"| Flare
+    Prx -->|"VFS JSON stubs"| Trm
+    Trm -->|"/media/virtual [rshared]"| Jlf
+    Jlf -->|"Priority Mode Webhook"| Trm
+    Jlf -->|"ItemDeleted Webhook"| Prx
 ```
 
 ---

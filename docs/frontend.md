@@ -277,24 +277,22 @@ CineClaw v2 is architected around a **mobile-first cinema experience**:
   - Completely eliminates raw filename strings (`S02E00`) and unparsed metadata tags.
 - **Error Recovery**: Dedicated error view with elevated `z-50 pointer-events-auto` and `stopPropagation` controls for «Повторить» (immediate retry), «Выбрать по сидам» (opens alternate releases modal), and «Вернуться назад» (return to details).
 - **Dynamic Video Quality Ladder & Bitrate Presets**:
-  - Automatically queries source media metrics (`width`, `height`, `bitrate`, `video_codec`) from `tracker-proxy` (`/api/stream/player/info`).
-  - Assembles a tiered resolution ladder stepping downwards from the source release's maximum resolution:
-    - **4K source**: «Оригинал (4K UHD • Direct Stream)» (45 Mbps, Direct Stream copy enabled), «1080p FHD (Высокое • 6 Мбит/с)», «1080p FHD (Веб • 3.5 Мбит/с)», «720p HD (Эконом • 2.2 Мбит/с)», «480p SD (Низкий трафик • 1.2 Мбит/с)».
-    - **1080p source**: «Оригинал (1080p FHD • Direct Stream)» (25 Mbps, Direct Stream copy enabled), «1080p FHD (Высокое • 6 Мбит/с)», «1080p FHD (Веб • 3.5 Мбит/с)», «720p HD (Эконом • 2.2 Мбит/с)», «480p SD (Низкий трафик • 1.2 Мбит/с)».
-    - **720p source**: «Оригинал (720p HD • Direct Stream)» (15 Mbps, Direct Stream copy enabled), «720p HD (Веб • 2.2 Мбит/с)», «480p SD (Низкий трафик • 1.2 Мбит/с)».
-    - **SD source**: «Оригинал (SD • Direct Stream)», «480p SD (1.2 Мбит/с)».
-  - **High-Quality Near-Lossless Transcoding**:
-    - Avoids potato low-quality fallback (which occurred when Jellyfin defaulted to 640x320 @ 64 kbps audio due to missing constraints).
-    - When `Оригинал` is selected, `EnableAutoStreamCopy=true` allows native H.264/AAC streams to be remuxed with 0 re-encoding and bit-for-bit lossless video.
-    - When transcoding presets are selected, explicit `VideoBitRate`, `MaxWidth`, `MaxHeight`, and `AudioBitRate` (192-256 kbps) ensure crisp, high-fidelity H.264 encoding matching web standards (2–4 Mbps).
-  - **Seamless Mid-Playback Switching**: Changing quality generates a unique `PlaySessionId` to isolate Jellyfin transcode workers and seamlessly seeks right back to `video.currentTime` with an animated quality confirmation toast.
-  - **1-Click Bitrate Reduction on Buffering Stall**: In addition to switching torrents, the 30-second stall prompt offers an instant `[ 🎚 Снизить битрейт (3.5 Мбит/с) ]` action to relieve network congestion without remounting.
-- **30-Second Stall Detection & Alternate Release Switcher**:
-  - Built-in timer monitors continuous waiting/buffering (`(isBuffering || isSyncingWithJellyfin) && !isPlaying`).
-  - If buffering exceeds 30 seconds, an obsidian cinema banner appears: *"Долгая буферизация (>30 сек). Похоже, текущая раздача медленно отдает данные. Хотите переключиться на раздачу с максимальным количеством сидов?"*
-  - User can snooze («Подождать»), instantly reduce bitrate to 3.5 Mbps, or open the **Alternate Release Picker** (`showAlternateModal`), strictly sorted by seeds descending (`seeds desc`) with live seed count (`🌱 N сидов`), leechers, file size, tracker, and audio tag.
-  - Selecting a release mounts it via `mode: 'add_version'`, resets the HLS/video decoder pipeline, refetches player info, and resumes playback seamlessly without leaving the player.
-  - Also accessible anytime on demand via the `⚡ Сменить раздачу` action button in the player header bar.
+  - **Dynamic Swarm & Quality Selector**:
+    - Replaces artificial server-side transcode presets with actual available BitTorrent releases from trackers.
+    - Computes real-time approximate stream bitrate for every release based on file size and title duration:
+      $$\text{Bitrate (Mbps)} = \frac{\text{size\_in\_bytes} \times 8}{\text{duration\_in\_seconds} \times 10^6}$$
+      (for TV series season packs, divides season pack size by episode count).
+    - Formats bitrates clearly (e.g. `28.5 Мбит/с`, `11.5 Мбит/с`, `2.4 Мбит/с`).
+    - Quality options sorted descending by resolution tier (4K UHD -> 1080p FHD -> 720p HD -> SD) and bitrate.
+    - Displays resolution badge (`4K` in amber, `1080p` in emerald, `720p` in blue), computed bitrate, size in GB, live seeder count (`🌱 501`), audio dubbing tags (`Дубляж`, `Многоголосый`), and tracker source.
+    - Highlights currently active release with `Текущая` badge and checkmark.
+    - Bottom player control bar pill displays active resolution and bitrate (e.g. `1080p • 10.5 Мбит/с`).
+    - **Seamless In-Player Release Switching**: Clicking another release mounts it instantly, preserves current playback position (`video.currentTime`) to the exact second, and resumes streaming without leaving the player.
+  - **30-Second Stall Detection & Alternate Release Switcher**:
+    - Built-in timer monitors continuous waiting/buffering (`(isBuffering || isPreparingStream) && !isPlaying`).
+    - If buffering exceeds 30 seconds, an obsidian cinema banner appears: *"Долгая буферизация (>30 сек). Похоже, текущая раздача медленно отдает данные. Хотите переключиться на раздачу с максимальным количеством сидов?"*
+    - User can snooze («Подождать»), open the Quality / Swarm selector («Сменить качество»), or open the **Alternate Release Picker** (`showAlternateModal`), strictly sorted by seeds descending (`seeds desc`) with live seed count (`🌱 N сидов`), leechers, file size, tracker, and audio tag.
+    - Selecting a release mounts it via `mode: 'add_version'`, updates player info, and resumes playback seamlessly from the exact timestamp.
 
 ---
 

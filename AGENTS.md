@@ -16,12 +16,11 @@
 | Service | Stack | Port | Execution Mode | Role |
 | :--- | :--- | :--- | :--- | :--- |
 | **`imdb-indexer`** | Rust 2021 (Axum, Tantivy, redb) | `8090` | Docker / GHCR (`ghcr.io/cineclaw/imdb-indexer`) | IMDb title search, TMDB seasons, poster proxy |
-| **`tracker-proxy`** | Go 1.25 (bbolt, goquery) | `9118` | Docker / GHCR (`ghcr.io/cineclaw/tracker-proxy`) | Multi-tracker scraper, dedup, FUSE mount orchestrator |
+| **`tracker-proxy`** | Go 1.25 (bbolt, modernc.org/sqlite, goquery) | `9118` | Docker / GHCR (`ghcr.io/cineclaw/tracker-proxy`) | Multi-tracker scraper, dedup, TorrServer orchestrator, SQLite playback store |
 | **`flaresolverr`** | Node/Chromium | `8191` | Docker Container (`v3.5.0`) | Cloudflare Turnstile clearance for RuTracker |
-| **`frontend`** | React 19, Vite 8, RTK Query, Tailwind | `3000` | Docker / GHCR (`ghcr.io/cineclaw/frontend`) | Dark cinema UI, client-side filters, 1-click playback |
+| **`frontend`** | React 19, Vite 8, RTK Query, Tailwind | `3000` | Docker / GHCR (`ghcr.io/cineclaw/frontend`) | Dark cinema UI, client-side filters, 1-click playback, external player launcher |
 | **`lodestarr`** | Rust | `3420` | Docker Container (`master`) | Torrent downloader daemon |
-| **`jellyfin`** | C# / .NET | `8096` | Docker Container (`10.11.11`) | Media server & playback target |
-| **`tiramisu`** | Go FUSE / GoStorm | `9080`, `8092` | Docker Container (`v1.9.59`) | FUSE virtual torrent streaming engine |
+| **`torrserver`** | Go (MatriX, GStreamer remuxing) | `8092` | Docker Container (`yourok/torrserver:latest`) | On-demand BitTorrent streaming engine, HLS remuxing, subtitle delivery |
 | **`cineclaw-ai`** | Go 1.25 (Genkit, bbolt, OpenRouter) | `9120` | Docker / GHCR (`ghcr.io/cineclaw/cineclaw-ai`) | Critic aggregation (RT, Metacritic, IMDb), AI consensus summarizer |
 
 ---
@@ -58,17 +57,13 @@ npm run dev
 npm run build
 ```
 
-### Media Server & FUSE Streaming (`jellyfin` & `tiramisu`)
+### Torrent Streaming Engine (`torrserver`)
 ```bash
-# Restart streaming stack
-docker compose restart tiramisu jellyfin
+# Restart TorrServer container
+docker compose restart torrserver
 
-# View streaming & mount logs
-docker compose logs -f tiramisu
-docker compose logs -f jellyfin
-
-# Auto-install and configure Jellyfin -> Tiramisu Priority Mode Webhook
-./scripts/setup-jellyfin-webhook.sh
+# View streaming & transcode logs
+docker compose logs -f torrserver
 ```
 
 ### Universal Linux / NAS Installer (`install.sh`)
@@ -102,9 +97,10 @@ docker compose logs -f jellyfin
    - Size clustering tolerance is strictly $\pm 0.105\text{ GB}$ ($\pm 0.1\text{ GB}$ rounded to 1 decimal place).
    - Only merge when verified by InfoHash comparison.
    - Combined releases must merge seeds ($\sum \text{seeds}$) and inject all official announce URLs into the synthesized magnet.
-4. **Tiramisu FUSE Invariants**:
-   - The `.mkv` JSON stub URL parameter **MUST** include `link=<40-char-hash>&index=<file-id>` for Tiramisu's VFS parser.
-   - If `tiramisu` container is restarted, `jellyfin` **MUST** also be restarted (`docker compose restart jellyfin`) to reconnect the shared mount.
+4. **TorrServer & Media Database Invariants**:
+   - Media playback state is persisted in pure-Go SQLite (`data/tracker-proxy/cineclaw.db`).
+   - External player stream links direct to port `8092` (`http://<host>:8092/stream?link=<hash>&index=<idx>&play`).
+   - Browser HLS streaming utilizes GStreamer zero-transcode remuxing (`/torr/gst/<hash>/master.m3u8?index=<idx>&audio=<audio>`).
 5. **Context Window Hygiene**:
    - Do not dump hundreds of lines of code or raw HTML into user messages. Keep responses concise and focused.
 6. **Documentation Maintenance (Strict Requirement)**:
@@ -120,8 +116,9 @@ docker compose logs -f jellyfin
 - **Phase 6 (Complete)**: **Edge Gateway Security & Persistent Web UI Authentication**: Reverse-proxy edge authorization on port 3000 (`auth_request /api/auth/verify`), timing-safe HMAC-SHA256 session token generation and verification (`tracker-proxy/pkg/auth`), 3-way credential parsing (HttpOnly Cookie `cineclaw_session`, `Authorization: Bearer <token>`, `Authorization: Basic <base64>`), sleek Obsidian cinema login modal with 30-day "Remember me" persistence, profile status & logout in header, and automated credentials provisioning via installer & `.env` (`AUTH_ENABLED`, `AUTH_USERNAME`, `AUTH_PASSWORD`, `AUTH_SECRET`).
 - **Phase 8 (Active Roadmap / Complete in Core)**: **AI Critics Aggregator & Cinema Consultant Agent**: Dedicated microservice `cineclaw-ai` (`:9120`) powered by Go 1.25, Genkit, and OpenRouter (`google/gemini-2.5-flash`). Aggregates Rotten Tomatoes %, Metascore, IMDb user rating/votes, and awards via OMDb and TMDB. Generates structured AI consensus (verdict, tone, pros/cons, target audience) with instant bbolt persistent caching. Seamless Nginx reverse-proxy on port 3000 (`/api/ai/`) and mobile-first Obsidian cinema cards in movie view.
 - **Phase 9 (Complete)**: **Catalog Discovery Hub, Tracker Swarm Hotlist, 4K UHD, Specialized Hubs & Clean Video Search**: High-performance home discovery hub replacing eager loading of multiple shelves with on-demand interactive catalog launcher (`CatalogTilesGrid.tsx`). Proactive BitTorrent swarm hotlist aggregation (`tracker-proxy/pkg/hotlist`, `GET /torrents/hotlist?type=movie|tv|anime|doc&quality=4k`) scraping RuTor/RuTracker seed-sorted swarms across 10 pages per category with strict $\le 2$ parallel request semaphores, matching against Tantivy index (<1ms) and displaying live seed counts (`🌱 {seeds} сидов`) with instant 1-click playback. Dedicated **«4K UHD Кинозал»** hub with pure 2160p HDR/DV filters and quality toggle pill `[ Все качества | ✨ Только 4K UHD ]`. Specialized **«Аниме & Мультипликация»** and **«Документальное кино»** hubs. Strict video-only category whitelists on RuTracker & NNM-Club with non-video noise purge on RuTor (eliminating audiobooks, music/FLAC, PC games, cracks), and explicit exclusion of Asian doramas and Turkish series. Curated streaming network hubs (Apple TV+ `with_networks=2552`, HBO Max `49`, Netflix `213`, Amazon Prime `1024`) with strict soap-opera/news filtering (`without_genres=10763,10764,10766,10767` and `vote_count.gte=50`). Universal multi-criteria discovery engine (`GET /api/catalog/discover`) supporting interactive Year, Genre, Country, and Rating chip filters, plus explicit, zero-leakage `[ 🎬 Фильмы | 📺 Сериалы ]` toggle across all views.
-- **Phase 10 (Complete)**: **Embedded Cinema Video Player & Jellyfin Resume/Progress Sync**: Native custom cinema player (`CinemaPlayerModal.tsx`) directly inside CineClaw dark obsidian interface using `Hls.js` and Apple native HLS. Reverse-proxy streaming via Nginx (`/jellyfin/` on port 3000) with WebSockets, chunked transfer, and infinite streaming timeouts. Full two-way Jellyfin watch history and resume position synchronization: automated start reporting (`POST /Sessions/Playing`), real-time heartbeat progress tracking (`POST /Sessions/Playing/Progress` & `/Users/{userId}/PlayingItems/{itemId}/Progress`), automatic continuation from where user left off (`UserData.PlaybackPositionTicks`), end-of-playback mark as played (`UserData.Played`), dynamic audio track switching (Russian dub, line, original AC3/DTS/AAC), WebVTT subtitle track selector, TV series episodes playlist drawer with auto-countdown next episode banner (`[ Следующая серия ▶ ]`), speed controller (0.5x-2x), PiP, fullscreen, mobile double-tap seek gestures (±10s) and desktop cinema keyboard shortcuts.
-- **Phase 11 (Complete)**: **Standalone Cinema Interface, 1-Click Quality Streaming, TV Series Episodes Browser & Resume Shelf**: Replaced raw torrent lists with two primary action buttons on titles: **«Смотреть»** and **«Добавить»** with an instant quality selector (`4K UHD`, `1080p FHD`, `720p HD`, `SD`) and live library mount status (`● В Jellyfin`). Automatic intelligent release selection via seed-dominant scoring heuristic (`scoreTorrent` prioritizing seeds, penalizing dead swarms, with dubbing as a minor tiebreaker, and complete season packs). Conflict-free auto-mounting with `mode: 'add_version'`. Dynamic player video quality ladder stepping down from release resolution (Original Direct Stream copy + 1080p 6M / 3.5M web standard + 720p 2.2M + 480p 1.2M), eliminating low-res potato transcoding, with mid-stream seamless switching and 1-click bitrate reduction on buffering stall. 30-second continuous buffering / stall detector with automatic prompt to switch releases and full alternate torrents modal sorted by seed count (`🌱 N сидов`) with 1-click seamless re-mounting. Top home shelf **«Продолжить просмотр» (Continue Watching)** querying Jellyfin API (`/UserItems/Resume` & `/Shows/NextUp`) with accurate runtime percentage calculation, series episode deduplication (single latest episode per show), «Далее» Next Up badge and filter tabs (`[ Все | В процессе | Далее ]`). Interactive Obsidian cinema resume prompt modal upon playback («Продолжить просмотр? Остановлено на: XX:XX» with `[ ▶ Продолжить с XX:XX ]` and `[ С начала ]`), and protection against 0-tick clobbering on player close. TV Series experience with interactive seasons selector, 16:9 episode cards with TMDB still backdrops, Russian plot synopses, air dates, progress bars, and 1-click episode play. Granular torrent list preserved under collapsible `<details>` accordion at the bottom for power users.
+- **Phase 10 (Complete)**: **Embedded Cinema Video Player & Streaming**: Native custom cinema player (`CinemaPlayerModal.tsx`) directly inside CineClaw dark obsidian interface using `Hls.js` and Apple native HLS. Dynamic audio track switching (Russian dub, line, original AC3/DTS/AAC), WebVTT subtitle track selector, TV series episodes playlist drawer with auto-countdown next episode banner (`[ Следующая серия ▶ ]`), speed controller (0.5x-2x), PiP, fullscreen, mobile double-tap seek gestures (±10s) and desktop cinema keyboard shortcuts.
+- **Phase 11 (Complete)**: **Standalone Cinema Interface, 1-Click Quality Streaming, TV Series Episodes Browser & Resume Shelf**: Replaced raw torrent lists with two primary action buttons on titles: **«Смотреть»** and **«Добавить»** with an instant quality selector (`4K UHD`, `1080p FHD`, `720p HD`, `SD`) and live library mount status (`● В медиатеке`). Automatic intelligent release selection via seed-dominant scoring heuristic (`scoreTorrent` prioritizing seeds, penalizing dead swarms, with dubbing as a minor tiebreaker, and complete season packs). Top home shelf **«Продолжить просмотр» (Continue Watching)** with accurate runtime percentage calculation, series episode deduplication (single latest episode per show), «Далее» Next Up badge and filter tabs (`[ Все | В процессе | Далее ]`). Interactive Obsidian cinema resume prompt modal upon playback («Продолжить просмотр? Остановлено на: XX:XX» with `[ ▶ Продолжить с XX:XX ]` and `[ С начала ]`). TV Series experience with interactive seasons selector, 16:9 episode cards with TMDB still backdrops, Russian plot synopses, air dates, progress bars, and 1-click episode play. Granular torrent list preserved under collapsible `<details>` accordion at the bottom for power users.
+- **Phase 12 (Complete)**: **Native TorrServer MatriX Streaming & Pure-Go SQLite Playback Engine**: Complete migration away from Jellyfin and Tiramisu FUSE. Native BitTorrent streaming via TorrServer MatriX (`yourok/torrserver:latest` on port `8092`) with GStreamer zero-transcode remuxing (H.264/H.265 passthrough + AAC audio transcoding). Embedded cinema web player with Hls.js, dynamic audio track switching, WebVTT subtitles, and external player launcher (VLC `vlc://`, IINA `iina://`, Infuse `infuse://`, and direct stream link copy). Pure-Go SQLite (`modernc.org/sqlite`) media database storing watch progress, duration, percentage, series episode tracking, Next Up recommendations, and deduplicated «Продолжить просмотр» home shelf.
 - **Phase 7 (Active Roadmap)**: Subtitle synchronization, intelligent cache retention.
 
 ---

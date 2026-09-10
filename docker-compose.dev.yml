@@ -21,8 +21,3 @@ services:
       context: ./cineclaw-ai
     image: cineclaw-ai:dev
 
-  jellyfin:
-    build:
-      context: ./jellyfin
-    image: cineclaw-jellyfin:dev
-

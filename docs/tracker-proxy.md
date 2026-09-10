@@ -20,10 +20,16 @@ tracker-proxy/
 │   │   └── cache.go          # bbolt database wrapper (imdb_cache & topic_hashes buckets)
 │   ├── config/
 │   │   └── config.go         # YAML configuration loader
+│   ├── db/
+│   │   └── sqlite.go         # Pure-Go SQLite database wrapper (modernc.org/sqlite, WAL mode)
 │   ├── flaresolverr/
 │   │   └── client.go         # FlareSolverr v1 JSON API client
+│   ├── playback/
+│   │   ├── store.go          # Watch progress CRUD, resume shelf & favorites
+│   │   └── nextup.go         # Next Up episode calculator against TMDB
 │   ├── stream/
-│   │   └── mounter.go        # Tiramisu GoStorm registration, stub writer & Jellyfin notification
+│   │   ├── service.go        # TorrStreamService orchestrator
+│   │   └── torrclient.go     # TorrServer MatriX JSON API & GStreamer client
 │   └── trackers/
 │       ├── nnmclub/          # NNM-Club scraper (Windows-1251, semaphore rate-limiting)
 │       ├── rutor/            # RuTor scraper (direct HTML parsing, inline magnet/hash)
@@ -300,21 +306,27 @@ Because Jellyfin library files are symbolic links pointing to `/media/virtual/`,
 
 ---
 
-## 11. Embedded Cinema Player & Swarm Memory Reaper (`pkg/stream/player.go`)
+## 11. Native BitTorrent Streaming & SQLite Playback Engine (`pkg/stream`, `pkg/playback`)
 
-- **Player Discovery & Episode Extraction**:
-  - Resolves mounted items in Jellyfin prioritizing type matching (`Series` for shows, `Movie` for movies) and falls back to `it.SeriesId` to guarantee valid series endpoints.
-  - For TV series, queries `/Shows/{seriesId}/Episodes` with targeted recursive refresh fallback and up to 4 retries if episode indexing is in flight.
-  - Returns master HLS playlist URL with `AudioCodec=aac&TranscodingMaxAudioChannels=2&EnableAutoStreamCopy=true`, parsed audio tracks, WebVTT subtitle tracks, episode list, and resume positions.
-- **Progress & Stop Reporting (`/api/stream/player/progress`, `/api/stream/player/stop`)**:
-  - `POST /api/stream/player/progress`: Updates active playback progress in Jellyfin's database via `POST /UserItems/{itemId}/UserData?userId={userId}` (`PlaybackPositionTicks`) and updates dashboard status via `POST /PlayingItems/{itemId}/Progress`.
-  - `POST /api/stream/player/stop`: Persists final position to `UserData`, clears the playing item banner via `DELETE /PlayingItems/{itemId}`, and reports stop to `POST /Sessions/Playing/Stopped`.
-  - Torrent Resource Guard: Only drops working torrents in GoStorm when `close_player: true` is passed (modal exit). During TV series episode switching (`close_player: false`), torrent swarms remain loaded in memory for sub-second episode startup.
-- **GoStorm Memory Reaper & Swarm Hygiene**:
-  - `DropAllWorkingTorrents`: Unloads torrents from active GoStorm memory (`action: "drop"`) upon playback stop or idle conditions to eliminate phantom upload/download bandwidth usage.
-  - `StartTorrentIdleReaper`: Background 60-second ticker monitoring active Jellyfin streaming sessions. Protected by `lastMountTime` guard (3-minute quiet window) ensuring newly mounted torrents are not dropped while Jellyfin scans and probes metadata.
-- **TV Episode Naming & Natural Russian Titles**:
-  - `mounter.go`: TV series episodes strictly use standard Jellyfin convention (`Series - SxxExx.mkv`, matching `Series - SxxExx.nfo` and `Series - SxxExx-thumb.jpg`) without appending version labels (` - 4K UHD`), preserving Jellyfin's regex episode index extraction (`IndexNumber`).
-  - `player.go`: Resilient episode indexing fallback (`parseSeasonEpisode` on `Path` / `Name`), TMDB Russian episode titles enrichment via `m.fetchEpisodesMetadata`, and natural Russian formatting in player header (`Сезон {S}, серия {E} — {Название}`).
+- **TorrServer MatriX Orchestrator (`pkg/stream/torrclient.go`)**:
+  - Adds torrents directly to TorrServer via `POST /torrents` (`action: "add"`, `link: magnet`, `save_to_db: true`).
+  - Fetches torrent file stats, file lists, and swarm health via `POST /torrents` (`action: "get"`).
+  - Robust season and episode file parsing (`ParseSeasonEpisode`) mapping regex filenames (`S01E02`, `1x02`, `Сезон 1/02.mkv`) directly to TorrServer file indices.
+  - Probes audio and subtitle streams via TorrServer probe API (`POST /probe`).
+  - GStreamer remuxing delivers HLS master playlist on `/torr/gst/<hash>/master.m3u8?index=<file-id>&audio=<audio-idx>` with zero-transcode video passthrough and AAC stereo audio transcoding.
+  - Subtitles served dynamically as WebVTT on `/torr/gst/<hash>/subs/<idx>.m3u8`.
+- **Pure-Go SQLite Media Database (`pkg/db/sqlite.go`, `pkg/playback/store.go`)**:
+  - Managed using `modernc.org/sqlite` (pure Go, zero CGo requirement).
+  - WAL mode enabled for high-concurrency read/write operations without locking.
+  - `watch_progress`: Stores watch time (`position_seconds`), runtime (`duration_seconds`), completion percentage (`playback_percent`), watched state (`is_completed`), torrent hash, link, and file index.
+  - Conflict-safe updates preserving existing durations and calculating real-time percentages.
+  - Deduplicated Resume shelf (`GetResumeList`) returning currently in-progress titles with accurate elapsed times.
+- **Next Up Episode Engine (`pkg/playback/nextup.go`)**:
+  - Compares user's watched episodes in SQLite with series season episode manifests from `imdb-indexer` (`/api/series/:tconst/episodes`).
+  - Automatically identifies the next sequential episode (e.g. S01E04 when S01E03 finishes) or first episode of the next season.
+  - Emits `ResumeItem` with `is_next_up: true` for immediate 1-click continuation on the home shelf.
+- **External Player Launchers**:
+  - Direct streams to TorrServer port `8092` (`http://<host>:8092/stream?link=<hash>&index=<idx>&play`).
+  - Deep linking protocol schemes supported: VLC (`vlc://`), IINA (`iina://weblink?url=...`), Infuse (`infuse://x-callback-url/play?url=...`), and clipboard stream link copy.
 
 

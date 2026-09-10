@@ -38,17 +38,12 @@ services:
     volumes:
       - ${DATA_DIR:-./data}/tracker-proxy/config.yaml:/app/config.yaml
       - ${DATA_DIR:-./data}/tracker-proxy/cache:/app/cache
-      - ${DATA_DIR:-./data}/media/source:/media/source
-      - ${DATA_DIR:-./data}/media/library:/media/library
+      - ${DATA_DIR:-./data}/tracker-proxy/db:/app/data
     environment:
       - CONFIG_PATH=/app/config.yaml
-      - JELLYFIN_URL=http://jellyfin:8096
-      - JELLYFIN_API_KEY=${JELLYFIN_API_KEY:-a4151fee9ef64ea6b23b185f8fe2720e}
-      - TIRAMISU_URL=http://tiramisu:8090
-      - MEDIA_SOURCE_PATH=/media/source
-      - MEDIA_LIBRARY_PATH=/media/library
-      - MEDIA_VIRTUAL_PATH=/media/virtual
-      - JELLYFIN_MEDIA_PATH=/media
+      - TORRSERVER_URL=http://torrserver:8090
+      - MEDIA_DB_PATH=/app/data/cineclaw.db
+      - CACHE_PATH=/app/cache/cache.db
       - IMDB_INDEXER_URL=http://imdb-indexer:8090
       - NNMCLUB_USERNAME=${NNMCLUB_USERNAME:-}
       - NNMCLUB_PASSWORD=${NNMCLUB_PASSWORD:-}
@@ -62,8 +57,7 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - flaresolverr
-      - tiramisu
-      - jellyfin
+      - torrserver
       - imdb-indexer
     networks:
       - cineclaw-net
@@ -88,43 +82,20 @@ services:
     networks:
       - cineclaw-net
 
-  tiramisu:
-    image: mrrobotogit/tiramisu:v1.9.59
-    container_name: tiramisu
+  torrserver:
+    image: yourok/torrserver:latest
+    container_name: torrserver
     restart: unless-stopped
-    cap_add:
-      - SYS_ADMIN
-    devices:
-      - /dev/fuse
-    security_opt:
-      - apparmor:unconfined
     ports:
-      - "${PORT_TIRAMISU:-9080}:9080"
-      - "8092:8090"
+      - "${PORT_TORRSERVER:-8092}:8090"
     volumes:
-      - ${DATA_DIR:-./data}/tiramisu/config.json:/config.json
-      - ${DATA_DIR:-./data}/tiramisu/root:/usr/local/tiramisu
-      - ${DATA_DIR:-./data}/media/source:/media/source
-      - ${DATA_DIR:-./data}/media/virtual:/media/virtual:rshared
+      - ${DATA_DIR:-./data}/torrserver:/opt/ts/db
+      - ${DATA_DIR:-./data}/torrserver/torrents:/opt/ts/torrents
     environment:
-      - MKV_PROXY_CONFIG_PATH=/config.json
-      - TIRAMISU_ROOT_PATH=/usr/local/tiramisu
-      - TIRAMISU_SOURCE_PATH=/media/source
-      - TIRAMISU_MOUNT_PATH=/media/virtual
-    networks:
-      - cineclaw-net
-
-  jellyfin:
-    image: jellyfin/jellyfin:10.11.11
-    container_name: jellyfin
-    restart: unless-stopped
-    ports:
-      - "${PORT_JELLYFIN:-8096}:8096"
-    volumes:
-      - ${DATA_DIR:-./data}/jellyfin/config:/config
-      - ${DATA_DIR:-./data}/jellyfin/cache:/cache
-      - ${DATA_DIR:-./data}/media/library:/media
-      - ${DATA_DIR:-./data}/media/virtual:/media/virtual:rslave
+      - TS_PORT=8090
+      - TS_PATH=/opt/ts/db
+      - TS_TORRENTSDIR=/opt/ts/torrents
+      - TS_DONTKILL=1
     networks:
       - cineclaw-net
 

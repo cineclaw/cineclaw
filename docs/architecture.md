@@ -37,16 +37,14 @@ graph TD
     end
 
     subgraph Streaming & Playback
+        TorrServer["TorrServer MatriX (Port 8092 - Go)"]
+        SQLite[("cineclaw.db (SQLite: watch_progress, favorites)")]
         Lodestarr["Lodestarr (Port 3420)"]
-        Tiramisu["Tiramisu FUSE Engine (Ports 9080, 8092 - Go)"]
-        VFS[("Virtual FUSE Mount (/media/virtual)")]
-        Jellyfin["Jellyfin Media Server (Port 8096)"]
         
-        Proxy -->|Register Torrent & File Stats| Tiramisu
-        Proxy -->|Write MKV Stubs & NFO| VFS
-        Tiramisu -->|FUSE Sequential Streaming| VFS
-        VFS -->|Transparent Video Access| Jellyfin
-        Proxy -->|Targeted Refresh /Items/{id}/Refresh| Jellyfin
+        Proxy -->|Add/Probe/Stream| TorrServer
+        Proxy -->|Progress & Resume Tracking| SQLite
+        TorrServer -->|GStreamer Remux HLS & WebVTT| Client
+        TorrServer -.->|Direct Stream (vlc, iina, infuse)| Client
         Proxy -.->|Magnet| Lodestarr
     end
 
@@ -106,20 +104,17 @@ graph TD
    - **Season ranges**: Supports single seasons (`Сезон 1`), ranges (`Сезоны 1-3`), and sets (`S01-S02`).
 3. Switching season tabs or resolution buttons filters the list instantly in memory without re-fetching backend APIs.
 
-### Step 6: One-Click Instant Streaming (Tiramisu FUSE + Jellyfin)
-1. User clicks the **"Смотреть"** button on any torrent card in the Frontend.
-2. Frontend dispatches `POST /api/stream/mount` with magnet URI (or tracker + torrent ID), title, IMDb `tconst`, media type, and season number.
-3. `tracker-proxy` (`pkg/stream/mounter.go`):
-   - Resolves missing InfoHash/magnet on the fly via tracker resolver.
-   - Submits the multi-tracker magnet to Tiramisu's GoStorm API (`POST http://tiramisu:8090/torrents`).
-   - Polls for torrent file stats until metadata/file-tree is ready.
-   - Writes JSON `.mkv` stubs (~150 bytes each) into `/media/source/movies/` or `/media/source/shows/`. Each stub specifies `"url": "http://127.0.0.1:8090/stream?link=<hash>&index=<id>"`.
-   - Queries `imdb-indexer` (`GET /series/:tconst/episodes`) to fetch full episode details (Russian title, plot, air dates).
-    - Writes accompanying `.nfo` XML metadata files (`movie.nfo`, `tvshow.nfo`, and per-episode `<title> - SxxExx.nfo`) populated with titles and episode numbers for instant Jellyfin recognition without remote lookups.
-    - Triggers targeted parent library refresh (`POST /Items/{folderId}/Refresh`) and recursive item refresh (`POST /Items/{itemId}/Refresh`), completely bypassing the 60-second `LibraryMonitor` debounce.
-4. Tiramisu FUSE exposes the virtual files at `/media/virtual` (mounted into Jellyfin at `/media`).
-5. Jellyfin scans the newly mounted media. A smart `ffprobe` wrapper inside the Jellyfin container caches stream signatures per series/season, reducing 86-episode media probes from 20 minutes to under 3 seconds!
-6. All seasons and episodes appear instantly with full metadata, ready for immediate playback.
+### Step 6: One-Click Instant Streaming (TorrServer MatriX + Pure-Go SQLite)
+1. User clicks the **"Смотреть"** button on any torrent card or quality preset in the Frontend.
+2. Frontend dispatches `POST /api/stream/mount` with magnet URI, title, IMDb `tconst`, media type, and season number.
+3. `tracker-proxy` (`pkg/stream/service.go`):
+   - Submits the multi-tracker magnet to TorrServer MatriX (`POST http://torrserver:8090/torrents`).
+   - Awaits torrent metadata and matches target video file (movie or specific series episode via `ParseSeasonEpisode`).
+   - Probes audio and subtitle streams via TorrServer file probe API.
+   - Persists playback state and torrent bindings into pure-Go SQLite (`data/tracker-proxy/cineclaw.db`).
+4. Embedded cinema player attaches HLS stream (`/torr/gst/<hash>/master.m3u8?index=<file-id>&audio=<idx>`) with zero-transcode GStreamer remuxing for video and AAC audio conversion.
+5. Watch progress, resume timestamps, and completion state synchronize continuously to SQLite (`/api/playback/progress`), powering the top «Продолжить просмотр» home shelf and Next Up series episode recommendations.
+6. Users can also launch external players (VLC, IINA, Infuse) with untranscoded direct stream URLs.
 
 ### Step 7: AI Critics Consensus & Scores Aggregation
 1. When opening a movie/series modal on Frontend, `useGetCriticSummaryQuery(tconst)` requests `GET /api/ai/critics/:tconst` through Nginx.

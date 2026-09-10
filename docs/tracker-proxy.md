@@ -213,6 +213,28 @@ To ensure maximum speed, clean metadata indexing, and avoid Jellyfin scanning st
   ```
 - `POST /api/stream/webhook/deleted` (alias: `/webhook/deleted`)  
   Webhook receiver for Jellyfin's Webhook plugin (`NotificationType: ItemDeleted`). Receives deleted item payloads and automatically unmounts the corresponding item and reconciles leftover stubs.
+- `GET /api/stream/resume` (alias: `/stream/resume`)  
+  Queries Jellyfin `/UserItems/Resume` to extract movies and episodes currently in-progress for the user. Automatically resolves parent series `tconst` if episode items lack direct IMDb IDs, calculates duration and resume percentage, and provides image URLs for the home "Continue Watching" shelf:
+  ```json
+  [
+    {
+      "item_id": "cdbb4fbba2a1c99efef3062a840ce59c",
+      "tconst": "tt14688458",
+      "title": "Укрытие",
+      "series_name": "Укрытие",
+      "episode_title": "Сын уборщика",
+      "media_type": "Episode",
+      "season_number": 1,
+      "episode_number": 5,
+      "duration_seconds": 3563.782,
+      "resume_seconds": 13.485938,
+      "played_percentage": 0.3784164687963517,
+      "image_url": "/jellyfin/Items/cdbb4fbba2a1c99efef3062a840ce59c/Images/Primary"
+    }
+  ]
+  ```
+- `GET /api/stream/player/info?tconst=...&season=N&episode=M` (alias: `/stream/player/info`)  
+  Fetches comprehensive playback metadata for the embedded cinema player (`CinemaPlayerModal`). Formats Russian natural titles (`Сезон N, серия M — Название`), surfaces all audio tracks (Dolby Digital Plus, Atmos, EAC3, AC3, AAC) and subtitles (VTT delivery URLs), resolves next episodes, and constructs the HLS master playlist URL using fMP4 fragmented MP4 segments (`SegmentContainer=mp4&MinSegments=2&BreakOnNonKeyFrames=True&VideoCodec=h264&AudioCodec=aac`) without `EnableAutoStreamCopy=true`, ensuring fast transcode/remux on any browser even for 4K HEVC HDR/DV content.
 
 ---
 
@@ -275,5 +297,24 @@ Because Jellyfin library files are symbolic links pointing to `/media/virtual/`,
   - `GET /torrents/hotlist?type=movie|tv|anime|doc&quality=4k&page=1&limit=20` (alias: `GET /api/stream/hotlist`)
   - Supports query parameter `?refresh=true` (or `?refresh_cache=true`) to force an immediate background re-scrape.
   - Returns `{ "id": "tracker_hotlist", "title": "Популярно на трекерах", "media_type": "...", "page": 1, "total_pages": ..., "total_results": ..., "items": [...] }`.
+
+---
+
+## 11. Embedded Cinema Player & Swarm Memory Reaper (`pkg/stream/player.go`)
+
+- **Player Discovery & Episode Extraction**:
+  - Resolves mounted items in Jellyfin prioritizing type matching (`Series` for shows, `Movie` for movies) and falls back to `it.SeriesId` to guarantee valid series endpoints.
+  - For TV series, queries `/Shows/{seriesId}/Episodes` with targeted recursive refresh fallback and up to 4 retries if episode indexing is in flight.
+  - Returns master HLS playlist URL with `AudioCodec=aac&TranscodingMaxAudioChannels=2&EnableAutoStreamCopy=true`, parsed audio tracks, WebVTT subtitle tracks, episode list, and resume positions.
+- **Progress & Stop Reporting (`/api/stream/player/progress`, `/api/stream/player/stop`)**:
+  - `POST /api/stream/player/progress`: Updates active playback progress in Jellyfin's database via `POST /UserItems/{itemId}/UserData?userId={userId}` (`PlaybackPositionTicks`) and updates dashboard status via `POST /PlayingItems/{itemId}/Progress`.
+  - `POST /api/stream/player/stop`: Persists final position to `UserData`, clears the playing item banner via `DELETE /PlayingItems/{itemId}`, and reports stop to `POST /Sessions/Playing/Stopped`.
+  - Torrent Resource Guard: Only drops working torrents in GoStorm when `close_player: true` is passed (modal exit). During TV series episode switching (`close_player: false`), torrent swarms remain loaded in memory for sub-second episode startup.
+- **GoStorm Memory Reaper & Swarm Hygiene**:
+  - `DropAllWorkingTorrents`: Unloads torrents from active GoStorm memory (`action: "drop"`) upon playback stop or idle conditions to eliminate phantom upload/download bandwidth usage.
+  - `StartTorrentIdleReaper`: Background 60-second ticker monitoring active Jellyfin streaming sessions. Protected by `lastMountTime` guard (3-minute quiet window) ensuring newly mounted torrents are not dropped while Jellyfin scans and probes metadata.
+- **TV Episode Naming & Natural Russian Titles**:
+  - `mounter.go`: TV series episodes strictly use standard Jellyfin convention (`Series - SxxExx.mkv`, matching `Series - SxxExx.nfo` and `Series - SxxExx-thumb.jpg`) without appending version labels (` - 4K UHD`), preserving Jellyfin's regex episode index extraction (`IndexNumber`).
+  - `player.go`: Resilient episode indexing fallback (`parseSeasonEpisode` on `Path` / `Name`), TMDB Russian episode titles enrichment via `m.fetchEpisodesMetadata`, and natural Russian formatting in player header (`Сезон {S}, серия {E} — {Название}`).
 
 

@@ -260,16 +260,71 @@ CineClaw v2 is architected around a **mobile-first cinema experience**:
 
 ---
 
-## 8. Build & Lint Commands
+## 8. Embedded Cinema Player (`CinemaPlayerModal.tsx`)
 
-```bash
-# Start local Vite dev server
-npm run dev
+- **Root Level Portal Rendering**: Rendered via `createPortal(..., document.body)` at `z-[100]` with `pointer-events-auto`, ensuring seamless pointer and touch interaction without interference or event interception from parent modals.
+- **Radix UI Dialog Coexistence**: When `isCinemaPlayerOpen` is active, the underlying `MovieModal` sets `open={!!movie && !isCinemaPlayerOpen}` to unmount/suspend the Radix dialog overlay, focus traps, and body pointer locks.
+- **Auto-Retry & Library Index Polling**: When newly mounted titles (especially multi-episode TV series) are still being processed by Jellyfin, the player displays a non-blocking pulsing sync state (`"Монтирование в Jellyfin... Jellyfin регистрирует видеопоток (попытка N/8)"`) and polls every 1.5s until episodes and streams are ready.
+- **Episode Switching & Stream Isolation**:
+  - `PlaySessionId` is freshly generated on every episode change, preventing Jellyfin's `DynamicHlsController` from reusing the previous episode's transcoding worker and `.ts` cache.
+  - The `<video>` element is keyed dynamically (`key={`video-${tconst}-${currentSeason ?? 0}-${currentEpisode ?? 0}`}`), guaranteeing full flush of hardware decoders and buffer isolation between episodes.
+  - During episode switching, `reportStop` passes `close_player: false` so that GoStorm maintains the series torrent in memory while reporting the previous episode's watch progress to Jellyfin. When the user explicitly closes the player (`close_player: true`), torrent resources are released.
+- **fMP4 HLS Pipeline & Web Compatibility**:
+  - Streams are requested with `SegmentContainer=mp4&MinSegments=2&BreakOnNonKeyFrames=True&VideoCodec=h264&AudioCodec=aac`.
+  - `EnableAutoStreamCopy=true` is strictly omitted to prevent Jellyfin from forcing video stream copy with `-bsf:v h264_mp4toannexb` on 4K HEVC / Dolby Vision content. This ensures Jellyfin automatically remuxes standard H.264 streams without re-encoding while seamlessly hardware/CPU transcoding 4K HEVC HDR streams into browser-playable H.264 fMP4 chunks.
+- **Natural Russian Episode Nomenclature**:
+  - Player header and drawer display natural Russian episode titles: `Сезон {N}, серия {M} — {Название}` (e.g. `Сезон 2, серия 3 — Соло`).
+  - Completely eliminates raw filename strings (`S02E00`) and unparsed metadata tags.
+- **Error Recovery**: Dedicated error view with elevated `z-50 pointer-events-auto` and `stopPropagation` controls for «Повторить» (immediate retry), «Выбрать по сидам» (opens alternate releases modal), and «Вернуться назад» (return to details).
+- **Dynamic Video Quality Ladder & Bitrate Presets**:
+  - Automatically queries source media metrics (`width`, `height`, `bitrate`, `video_codec`) from `tracker-proxy` (`/api/stream/player/info`).
+  - Assembles a tiered resolution ladder stepping downwards from the source release's maximum resolution:
+    - **4K source**: «Оригинал (4K UHD • Direct Stream)» (45 Mbps, Direct Stream copy enabled), «1080p FHD (Высокое • 6 Мбит/с)», «1080p FHD (Веб • 3.5 Мбит/с)», «720p HD (Эконом • 2.2 Мбит/с)», «480p SD (Низкий трафик • 1.2 Мбит/с)».
+    - **1080p source**: «Оригинал (1080p FHD • Direct Stream)» (25 Mbps, Direct Stream copy enabled), «1080p FHD (Высокое • 6 Мбит/с)», «1080p FHD (Веб • 3.5 Мбит/с)», «720p HD (Эконом • 2.2 Мбит/с)», «480p SD (Низкий трафик • 1.2 Мбит/с)».
+    - **720p source**: «Оригинал (720p HD • Direct Stream)» (15 Mbps, Direct Stream copy enabled), «720p HD (Веб • 2.2 Мбит/с)», «480p SD (Низкий трафик • 1.2 Мбит/с)».
+    - **SD source**: «Оригинал (SD • Direct Stream)», «480p SD (1.2 Мбит/с)».
+  - **High-Quality Near-Lossless Transcoding**:
+    - Avoids potato low-quality fallback (which occurred when Jellyfin defaulted to 640x320 @ 64 kbps audio due to missing constraints).
+    - When `Оригинал` is selected, `EnableAutoStreamCopy=true` allows native H.264/AAC streams to be remuxed with 0 re-encoding and bit-for-bit lossless video.
+    - When transcoding presets are selected, explicit `VideoBitRate`, `MaxWidth`, `MaxHeight`, and `AudioBitRate` (192-256 kbps) ensure crisp, high-fidelity H.264 encoding matching web standards (2–4 Mbps).
+  - **Seamless Mid-Playback Switching**: Changing quality generates a unique `PlaySessionId` to isolate Jellyfin transcode workers and seamlessly seeks right back to `video.currentTime` with an animated quality confirmation toast.
+  - **1-Click Bitrate Reduction on Buffering Stall**: In addition to switching torrents, the 30-second stall prompt offers an instant `[ 🎚 Снизить битрейт (3.5 Мбит/с) ]` action to relieve network congestion without remounting.
+- **30-Second Stall Detection & Alternate Release Switcher**:
+  - Built-in timer monitors continuous waiting/buffering (`(isBuffering || isSyncingWithJellyfin) && !isPlaying`).
+  - If buffering exceeds 30 seconds, an obsidian cinema banner appears: *"Долгая буферизация (>30 сек). Похоже, текущая раздача медленно отдает данные. Хотите переключиться на раздачу с максимальным количеством сидов?"*
+  - User can snooze («Подождать»), instantly reduce bitrate to 3.5 Mbps, or open the **Alternate Release Picker** (`showAlternateModal`), strictly sorted by seeds descending (`seeds desc`) with live seed count (`🌱 N сидов`), leechers, file size, tracker, and audio tag.
+  - Selecting a release mounts it via `mode: 'add_version'`, resets the HLS/video decoder pipeline, refetches player info, and resumes playback seamlessly without leaving the player.
+  - Also accessible anytime on demand via the `⚡ Сменить раздачу` action button in the player header bar.
 
-# Typecheck and production bundle build
-npm run build
+---
 
-# Run fast linter (oxlint)
-npm run lint
-```
+## 10. Standalone Cinema Experience & Episode Browser
+
+### Intelligent Quality & Action Selector (`QualityActionButtons.tsx`)
+- Replaces raw torrent lists by default with two primary action buttons on titles:
+  - **«Смотреть»**: Launches playback immediately in the embedded cinema player. If the release is already in Jellyfin, playback begins instantly with 0 wait time. If not yet mounted, automatically mounts the best matching torrent with `mode: 'add_version'` and starts playback without interrupting the user.
+  - **«Добавить»**: Silently mounts the chosen quality release into Jellyfin in the background, displaying an inline confirmation badge without navigating away.
+- **Quality Selector Tabs**: `4K UHD`, `1080p FHD`, `720p HD`, and `SD`. Each tier displays availability, live Jellyfin library presence (`● В Jellyfin`), seeder count, file size, and audio dubbing label (e.g. `Дубляж`, `Red Head Sound`, `MVO`).
+
+### Automated Torrent Selection Heuristic (`torrentSelector.ts`)
+- **`classifyResolution`**: Buckets releases into `4k`, `1080p`, `720p`, or `sd`.
+- **`scoreTorrent`**: Multi-factor scoring algorithm prioritizing swarm vitality:
+  - **Seeders (Primary Metric)**: High linear and logarithmic weight: $\min(\text{seeds}, 50) \times 3 + \ln(1 + \text{seeds}) \times 25$.
+  - **Dead / Low-Seed Penalties**: Severe penalties for dead or low-seed torrents: $\text{seeds} = 0$ (-250), $\text{seeds} < 3$ (-100), $\text{seeds} < 6$ (-40).
+  - **Audio Dubbing (Minor Tiebreaker)**: Secondary bonus if seeds are comparable: Dub / Red Head Sound / iTunes (+10), professional multi-voice MVO (+8), dual-voice DVO (+4), author voiceovers (+2). Popular original/MVO releases with high seeds always take precedence over low-seed dubs.
+  - **Encode Type**: Clean encodes get a bonus: Remux / BDRemux / Blu-ray / WEB-DL / BDRip (+15).
+  - **Penalty for Screeners**: Severe penalty (-300) for CAMRip, TS, Telesync.
+  - **TV Season Matching**: Strict season alignment (+120 for target season, +30 for complete season pack, -500 if explicitly for a different season).
+
+### Continue Watching Shelf (`ContinueWatchingShelf.tsx`)
+- Renders at the top of the home screen, fetching in-progress items via `useGetResumeItemsQuery` from `/api/stream/resume`.
+- Features 16:9 thumbnail previews, season/episode pills, remaining time calculation, visual progress bar, and instant 1-click playback continuation.
+
+### TV Series Episode Browser (`SeriesEpisodeBrowser.tsx`)
+- Displays season selector tabs with episode counts and mounted library badges.
+- 16:9 episode cards featuring TMDB episode still images, episode numbers, Russian episode titles, air dates, plot synopsis, watch progress indicators, and 1-click episode playback.
+- Embeds `QualityActionButtons` for the active season.
+
+### Collapsible Manual Torrent Picker
+- Retains the granular `TorrentList` within a collapsible `<details>` accordion at the bottom of the modal, allowing power users to inspect trackers, hashes, and individual files whenever needed.
 

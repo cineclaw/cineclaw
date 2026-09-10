@@ -12,3 +12,5 @@ data/*
 .idea/
 .vscode/
 *.log
+*-bin
+tracker-proxy-bin

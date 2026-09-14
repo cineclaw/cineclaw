@@ -107,17 +107,6 @@ ensure_runtime_files() {
             exit 1
         fi
     fi
-
-    # 3. scripts/setup-jellyfin-webhook.sh
-    if [ ! -f "$SCRIPT_DIR/scripts/setup-jellyfin-webhook.sh" ]; then
-        mkdir -p "$SCRIPT_DIR/scripts"
-        if command -v curl >/dev/null 2>&1; then
-            curl -fsSL "https://raw.githubusercontent.com/cineclaw/cineclaw/main/scripts/setup-jellyfin-webhook.sh" -o "$SCRIPT_DIR/scripts/setup-jellyfin-webhook.sh" 2>/dev/null || true
-        elif command -v wget >/dev/null 2>&1; then
-            wget -qO "$SCRIPT_DIR/scripts/setup-jellyfin-webhook.sh" "https://raw.githubusercontent.com/cineclaw/cineclaw/main/scripts/setup-jellyfin-webhook.sh" 2>/dev/null || true
-        fi
-        chmod +x "$SCRIPT_DIR/scripts/setup-jellyfin-webhook.sh" 2>/dev/null || true
-    fi
 }
 
 # ------------------------------------------------------------------------------

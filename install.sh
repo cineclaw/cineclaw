@@ -192,18 +192,18 @@ cmd_status() {
         echo -e "  Tracker Proxy (:9118):     ${RED}Offline${NC}"
     fi
 
-    # Check Jellyfin
-    if curl -s -f http://localhost:8096/health >/dev/null 2>&1; then
-        echo -e "  Jellyfin (:8096):          ${GREEN}Online${NC}"
+    # Check TorrServer
+    if curl -s -f http://localhost:8092/echo >/dev/null 2>&1; then
+        echo -e "  TorrServer MatriX (:8092): ${GREEN}Online${NC}"
     else
-        echo -e "  Jellyfin (:8096):          ${RED}Offline${NC}"
+        echo -e "  TorrServer MatriX (:8092): ${RED}Offline${NC}"
     fi
 
-    # Check Tiramisu
-    if curl -s -f http://localhost:9080/metrics >/dev/null 2>&1; then
-        echo -e "  Tiramisu FUSE (:9080):     ${GREEN}Online${NC}"
+    # Check CineClaw AI
+    if curl -s -f http://localhost:9120/health >/dev/null 2>&1; then
+        echo -e "  CineClaw AI (:9120):       ${GREEN}Online${NC}"
     else
-        echo -e "  Tiramisu FUSE (:9080):     ${YELLOW}Not reachable on :9080 (may be starting)${NC}"
+        echo -e "  CineClaw AI (:9120):       ${RED}Offline${NC}"
     fi
 
     # Check FlareSolverr
@@ -226,11 +226,6 @@ cmd_restart() {
     log_step "Restarting Cine-Claw Stack"
     $COMPOSE_CMD restart
     log_ok "Stack restarted."
-    # Run webhook config if needed
-    if [ -f "scripts/setup-jellyfin-webhook.sh" ]; then
-        log_info "Refreshing Jellyfin webhook bindings..."
-        COMPOSE_CMD="$COMPOSE_CMD" ./scripts/setup-jellyfin-webhook.sh || true
-    fi
 }
 
 cmd_stop() {
@@ -258,7 +253,7 @@ cmd_update() {
     log_info "Pulling latest pre-built container images from GHCR..."
     $COMPOSE_CMD pull
     log_info "Restarting CineClaw stack..."
-    $COMPOSE_CMD up -d
+    $COMPOSE_CMD up -d --remove-orphans
     log_ok "CineClaw has been updated to the latest version."
 }
 
@@ -342,24 +337,8 @@ check_prerequisites() {
     detect_compose_cmd
     log_ok "Docker Compose command: '$COMPOSE_CMD'"
 
-    # 5. Kernel FUSE check (/dev/fuse)
-    if [ ! -e /dev/fuse ]; then
-        log_warn "/dev/fuse device node not found."
-        # Try loading module
-        if [ -f "/lib/modules/fuse.ko" ]; then
-            log_info "Attempting to insert Synology FUSE module (insmod /lib/modules/fuse.ko)..."
-            insmod /lib/modules/fuse.ko 2>/dev/null || sudo insmod /lib/modules/fuse.ko 2>/dev/null || true
-        elif command -v modprobe >/dev/null 2>&1; then
-            log_info "Attempting to load fuse kernel module (modprobe fuse)..."
-            modprobe fuse 2>/dev/null || sudo modprobe fuse 2>/dev/null || true
-        fi
-    fi
-
-    if [ -e /dev/fuse ]; then
-        log_ok "FUSE kernel module (/dev/fuse) is available."
-    else
-        log_warn "/dev/fuse is still not accessible. Virtual torrent mounting via Tiramisu may fail unless FUSE is enabled."
-    fi
+    # 5. Native HTTP Streaming Engine (TorrServer MatriX)
+    log_ok "Streaming engine: TorrServer MatriX (zero-transcode HTTP Range requests, FUSE not required)."
 
     # 6. Basic utilities
     for tool in curl unzip base64; do
@@ -404,11 +383,17 @@ load_config_file() {
             NNMCLUB_USERNAME|NNMCLUB_USER) current_nnmclub_user="$val" ;;
             NNMCLUB_PASSWORD|NNMCLUB_PASS) current_nnmclub_pass="$val" ;;
             TZ|TIMEZONE) current_tz="$val" ;;
-            JELLYFIN_API_KEY) current_jellyfin_key="$val" ;;
             AUTH_ENABLED) current_auth_enabled="$val" ;;
             AUTH_USERNAME|AUTH_USER) current_auth_user="$val" ;;
             AUTH_PASSWORD|AUTH_PASS) current_auth_pass="$val" ;;
             AUTH_SECRET) current_auth_secret="$val" ;;
+            OPENROUTER_API_KEY) current_openrouter_key="$val" ;;
+            OMDB_API_KEY) current_omdb_key="$val" ;;
+            AI_SUMMARY_MODEL) current_ai_summary_model="$val" ;;
+            AI_COMPACT_MODEL) current_ai_compact_model="$val" ;;
+            AI_AGENT_MODEL) current_ai_agent_model="$val" ;;
+            PORT_TORRSERVER) current_port_torrserver="$val" ;;
+            PORT_AI) current_port_ai="$val" ;;
         esac
     done < "$cfg"
 }
@@ -428,11 +413,17 @@ configure_environment() {
     local current_nnmclub_user="${NNMCLUB_USERNAME:-}"
     local current_nnmclub_pass="${NNMCLUB_PASSWORD:-}"
     local current_tz="${TZ:-Europe/Moscow}"
-    local current_jellyfin_key="${JELLYFIN_API_KEY:-a4151fee9ef64ea6b23b185f8fe2720e}"
     local current_auth_enabled="${AUTH_ENABLED:-true}"
     local current_auth_user="${AUTH_USERNAME:-admin}"
     local current_auth_pass="${AUTH_PASSWORD:-wavemp3}"
     local current_auth_secret="${AUTH_SECRET:-}"
+    local current_openrouter_key="${OPENROUTER_API_KEY:-}"
+    local current_omdb_key="${OMDB_API_KEY:-}"
+    local current_ai_summary_model="${AI_SUMMARY_MODEL:-google/gemini-2.5-flash}"
+    local current_ai_compact_model="${AI_COMPACT_MODEL:-google/gemini-2.5-flash-lite}"
+    local current_ai_agent_model="${AI_AGENT_MODEL:-google/gemini-2.5-flash}"
+    local current_port_torrserver="${PORT_TORRSERVER:-8092}"
+    local current_port_ai="${PORT_AI:-9120}"
 
     # Priority 1: Specified custom config file (-c / --config)
     if [ -n "$custom_config" ]; then
@@ -471,7 +462,7 @@ configure_environment() {
 
         # 1. NAS IP / Domain
         echo -e "${BOLD}1. NAS Host IP or Domain${NC}"
-        echo -e "   This address is used by external devices (TVs, phones, laptops) to stream from Jellyfin."
+        echo -e "   This address is used by external devices (TVs, phones, laptops) for streaming."
         prompt_read "   Host IP or Domain [$current_nas_ip]: " input_nas_ip
         if [ -n "$input_nas_ip" ]; then
             current_nas_ip="$input_nas_ip"
@@ -586,9 +577,6 @@ RUTRACKER_PASSWORD=$current_rutracker_pass
 NNMCLUB_USERNAME=$current_nnmclub_user
 NNMCLUB_PASSWORD=$current_nnmclub_pass
 
-# Jellyfin API Key
-JELLYFIN_API_KEY=$current_jellyfin_key
-
 # Web UI & API Authentication
 AUTH_ENABLED=$current_auth_enabled
 AUTH_USERNAME=$current_auth_user
@@ -597,12 +585,19 @@ AUTH_SECRET=$current_auth_secret
 
 # Host Ports
 PORT_FRONTEND=3000
-PORT_JELLYFIN=8096
+PORT_TORRSERVER=$current_port_torrserver
 PORT_INDEXER=8090
 PORT_PROXY=9118
-PORT_TIRAMISU=9080
+PORT_AI=$current_port_ai
 PORT_FLARESOLVERR=8191
 PORT_LODESTARR=3420
+
+# AI & Critics Configuration
+OPENROUTER_API_KEY=$current_openrouter_key
+OMDB_API_KEY=$current_omdb_key
+AI_SUMMARY_MODEL=$current_ai_summary_model
+AI_COMPACT_MODEL=$current_ai_compact_model
+AI_AGENT_MODEL=$current_ai_agent_model
 EOF
 
     # Export variables for current shell
@@ -613,19 +608,23 @@ EOF
     export RUTRACKER_PASSWORD="$current_rutracker_pass"
     export NNMCLUB_USERNAME="$current_nnmclub_user"
     export NNMCLUB_PASSWORD="$current_nnmclub_pass"
-    export JELLYFIN_API_KEY="$current_jellyfin_key"
     export AUTH_ENABLED="$current_auth_enabled"
     export AUTH_USERNAME="$current_auth_user"
     export AUTH_PASSWORD="$current_auth_pass"
     export AUTH_SECRET="$current_auth_secret"
     export TZ="$current_tz"
     export PORT_FRONTEND=3000
-    export PORT_JELLYFIN=8096
+    export PORT_TORRSERVER="$current_port_torrserver"
     export PORT_INDEXER=8090
     export PORT_PROXY=9118
-    export PORT_TIRAMISU=9080
+    export PORT_AI="$current_port_ai"
     export PORT_FLARESOLVERR=8191
     export PORT_LODESTARR=3420
+    export OPENROUTER_API_KEY="$current_openrouter_key"
+    export OMDB_API_KEY="$current_omdb_key"
+    export AI_SUMMARY_MODEL="$current_ai_summary_model"
+    export AI_COMPACT_MODEL="$current_ai_compact_model"
+    export AI_AGENT_MODEL="$current_ai_agent_model"
 
     log_ok "Configuration successfully saved."
 }
@@ -647,31 +646,19 @@ initialize_directories() {
     log_info "Target data root: $abs_data_dir"
 
     # Create directory tree
-    mkdir -p "$abs_data_dir/media/source"
-    mkdir -p "$abs_data_dir/media/library"
-    mkdir -p "$abs_data_dir/media/virtual"
     mkdir -p "$abs_data_dir/tracker-proxy/cache"
-    mkdir -p "$abs_data_dir/tiramisu/root/STATE"
-    mkdir -p "$abs_data_dir/jellyfin/config"
-    mkdir -p "$abs_data_dir/jellyfin/cache"
-    mkdir -p "$abs_data_dir/imdb-indexer/indices"
-    mkdir -p "$abs_data_dir/imdb-indexer/posters"
-    mkdir -p "$abs_data_dir/imdb-indexer/downloads"
+    mkdir -p "$abs_data_dir/tracker-proxy/db"
+    mkdir -p "$abs_data_dir/torrserver/torrents"
+    mkdir -p "$abs_data_dir/cineclaw-ai"
+    mkdir -p "$abs_data_dir/imdb-indexer"
     mkdir -p "$abs_data_dir/lodestarr"
 
-    # Permissions: Ensure virtual and media directories are globally writable
-    # so Jellyfin and Tiramisu containers can create/read VFS mounts without UID conflicts
-    chmod -R 777 "$abs_data_dir/media" 2>/dev/null || true
-    chmod -R 777 "$abs_data_dir/tiramisu" 2>/dev/null || true
+    # Permissions: Ensure writable directories without UID conflicts
+    chmod -R 777 "$abs_data_dir/torrserver" 2>/dev/null || true
+    chmod -R 777 "$abs_data_dir/tracker-proxy" 2>/dev/null || true
+    chmod -R 777 "$abs_data_dir/cineclaw-ai" 2>/dev/null || true
 
     # Copy template configs if they do not exist
-    if [ ! -f "$abs_data_dir/tiramisu/config.json" ]; then
-        if [ -f "$SCRIPT_DIR/data/tiramisu/config.json" ]; then
-            log_info "Provisioning tiramisu/config.json..."
-            cp "$SCRIPT_DIR/data/tiramisu/config.json" "$abs_data_dir/tiramisu/config.json"
-        fi
-    fi
-
     if [ ! -f "$abs_data_dir/tracker-proxy/config.yaml" ]; then
         if [ -f "$SCRIPT_DIR/data/tracker-proxy/config.yaml" ]; then
             log_info "Provisioning tracker-proxy/config.yaml..."
@@ -696,8 +683,8 @@ deploy_containers() {
     log_step "Downloading & Starting CineClaw Microservices"
     log_info "Executing: $COMPOSE_CMD pull"
     $COMPOSE_CMD pull || log_warn "Pulling some images failed, attempting to start with available images..."
-    log_info "Executing: $COMPOSE_CMD up -d"
-    $COMPOSE_CMD up -d
+    log_info "Executing: $COMPOSE_CMD up -d --remove-orphans"
+    $COMPOSE_CMD up -d --remove-orphans
 
     log_step "Waiting for Services to Become Healthy"
     
@@ -734,10 +721,10 @@ deploy_containers() {
         sleep 1
     done
 
-    # 4. Wait for Jellyfin
-    echo -n "  Waiting for Jellyfin Media Server (:8096)..."
+    # 4. Wait for TorrServer MatriX
+    echo -n "  Waiting for TorrServer MatriX (:8092)..."
     for i in {1..40}; do
-        if curl -s -f http://localhost:8096/health >/dev/null 2>&1; then
+        if curl -s -f http://localhost:8092/echo >/dev/null 2>&1; then
             echo -e " ${GREEN}ready!${NC}"
             break
         fi
@@ -745,14 +732,16 @@ deploy_containers() {
         sleep 1
     done
 
-    # Run Jellyfin webhook setup
-    log_step "Configuring Jellyfin Webhooks (Priority Streaming & Auto-Cleanup)"
-    if [ -f "scripts/setup-jellyfin-webhook.sh" ]; then
-        COMPOSE_CMD="$COMPOSE_CMD" \
-        JELLYFIN_URL="http://localhost:8096" \
-        DATA_DIR="$DATA_DIR" \
-        ./scripts/setup-jellyfin-webhook.sh || log_warn "Webhook setup finished with warnings (will retry on next start)."
-    fi
+    # 5. Wait for CineClaw AI
+    echo -n "  Waiting for CineClaw AI (:9120)..."
+    for i in {1..30}; do
+        if curl -s -f http://localhost:9120/health >/dev/null 2>&1; then
+            echo -e " ${GREEN}ready!${NC}"
+            break
+        fi
+        echo -n "."
+        sleep 1
+    done
 }
 
 # ------------------------------------------------------------------------------
@@ -767,10 +756,10 @@ print_summary() {
     echo -e "${BOLD}${GREEN}========================================================================${NC}"
     echo ""
     echo -e "  ${BOLD}Web UI & PWA:${NC}          ${CYAN}http://${host}:3000${NC}"
-    echo -e "  ${BOLD}Jellyfin Media Server:${NC} ${CYAN}http://${host}:8096${NC}"
+    echo -e "  ${BOLD}TorrServer MatriX:${NC}     ${CYAN}http://${host}:8092${NC}"
     echo -e "  ${BOLD}IMDb Search Indexer:${NC}   ${CYAN}http://${host}:8090${NC}"
     echo -e "  ${BOLD}Tracker Proxy API:${NC}     ${CYAN}http://${host}:9118${NC}"
-    echo -e "  ${BOLD}Tiramisu FUSE Metrics:${NC} ${CYAN}http://${host}:9080${NC}"
+    echo -e "  ${BOLD}CineClaw AI Engine:${NC}    ${CYAN}http://${host}:9120${NC}"
     echo ""
     echo -e "  ${BOLD}Storage Location:${NC}      ${DIM}${DATA_DIR:-./data}${NC}"
     echo ""

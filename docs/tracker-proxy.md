@@ -26,9 +26,15 @@ tracker-proxy/
 │   │   └── client.go         # FlareSolverr v1 JSON API client
 │   ├── playback/
 │   │   ├── store.go          # Watch progress CRUD, resume shelf & favorites
+│   │   ├── watchlist_store.go# Watchlist CRUD (media_watchlist table)
 │   │   └── nextup.go         # Next Up episode calculator against TMDB
+│   ├── hotlist/
+│   │   ├── service.go        # Hotlist & fresh releases manager with bbolt caching
+│   │   ├── scraper.go        # RuTor/RuTracker swarm & fresh release scrapers
+│   │   ├── matcher.go        # Concurrent Tantivy metadata resolution & grouping
+│   │   └── models.go         # Data models for hotlist and fresh items
 │   ├── stream/
-│   │   ├── service.go        # TorrStreamService orchestrator
+│   │   ├── service.go        # TorrStreamService orchestrator (Range requests & TorrServer stream)
 │   │   └── torrclient.go     # TorrServer MatriX JSON API & GStreamer client
 │   └── trackers/
 │       ├── nnmclub/          # NNM-Club scraper (Windows-1251, semaphore rate-limiting)
@@ -67,8 +73,20 @@ tracker-proxy/
   - Inter-request pacing: Minimum $75\text{ms} - 100\text{ms}$ delay between topic page fetches.
 - **Strict Video Forum Whitelist**: Replaces broad `f[]=-1` with dedicated video subforums based on media type:
   - **Movies**: 954, 219, 1296 (UHD), 227 (HD), 882, 225, 221, 1177, 912, 909, 884, 1150, 1345, 1346, 891, 889, 682, 694, 1299, 1313, 1312, 1330, 1332, 1337, 1339, 620, 624, 628.
-  - **TV Series**: 768, 769, 1219, 1221, 1220, 1344, 1265, 784, 774, 770, 780, 781, 1300, 1322, 658, 232, 620, 624, 628.
+  - **TV Series**: 768, 769, 1219, 1221, 1220, 1344, 1265, 784, 770, 780, 781, 1300, 1322, 658, 232, 620, 624, 628.
   - Guarantees search results contain zero audiobooks, software, or soundtracks.
+
+### 3.4 IMDb ID Title Auto-Resolution, Disambiguation & Candidate Scoring
+- **No IMDb Support on Trackers**: RuTracker, RuTor, and NNM-Club do not index or search by IMDb ID (`tt...`). They only search by text in topic titles.
+- **Empty Query Prevention**: `Aggregator.Search` strictly checks `if strings.TrimSpace(query.Query) == ""` and returns `nil` immediately. Querying trackers with empty strings is forbidden to avoid dumping the tracker's front page / newest releases into search results.
+- **IMDb Indexer Title Auto-Resolution & Year Disambiguation**: When `imdb_id` is passed but `q` is omitted, `tracker-proxy` (`executeSearch` and `autoResolveTorrent`) queries `imdb-indexer` (`/api/movie/{tconst}/metadata`) to resolve `meta.Title`, `meta.OriginalTitle`, and `meta.Year`. For movies, it appends the release year (e.g. `Приглашение 2026`) to eliminate noise from older releases or prefix collisions (e.g. "Приглашение к убийству" vs "Приглашение (2026)"), falling back to search without year if zero results are found.
+- **`ScoreCandidate` Multidimensional Relevance Ranking**: When selecting candidates in `autoResolveTorrent` or ranking search results, `stream.ScoreCandidate` scores releases considering:
+  - Exact year match (+500), boundary year $\pm 1$ (+150), major year mismatch $\Delta > 1$ (-2000 penalty).
+  - Original title match (+600) and mismatch (-1000 penalty).
+  - Russian title precision (+400) and extra word penalties (-400).
+  - Resolution preferences (1080p +30, 4K +20, 720p +10) and single-season match (+100).
+  - Seed count contribution capped at 1000 to prevent unrelated, high-seed releases from overwhelming genuine matches.
+- **Cache Poisoning Prevention**: `Store.Set` in `pkg/cache/cache.go` refuses to cache entries if `query` is empty. `Store.Get` automatically invalidates and ignores any legacy cache entries where `entry.Query == ""`.
 
 ---
 
@@ -158,6 +176,8 @@ To ensure maximum speed, clean metadata indexing, and avoid Jellyfin scanning st
 
 ## 7. API Endpoints
 
+- `GET /api/home?platform=tv|web&refresh=true|false` (aliases: `/home`, `/api/hub`, `/hub`)  
+  Unified Backend-For-Frontend (BFF) aggregator. Concurrently fetches Continue Watching (SQLite), Watchlist (SQLite), Fresh Releases (RuTor), Popular Swarms (RuTor), 4K UHD Swarms (RuTor), and Curated TMDB Feeds (`imdb-indexer:8090/api/feeds`) using `errgroup` in $<2$ms. Caches results in RAM for 60s and invalidates immediately upon user watch state or watchlist changes. Returns normalized `HomePayload` with `hero` and `shelves`.
 - `GET /api/torrents?imdb_id=tt...&q=...&season=...&refresh_cache=true&limit=100`  
   Fetches aggregated and deduped torrents. Returns cached results from bbolt if fresh.
 - `POST /api/stream/mount` (aliases: `/torrents/mount`, `/stream/mount`)  
@@ -220,27 +240,37 @@ To ensure maximum speed, clean metadata indexing, and avoid Jellyfin scanning st
 - `POST /api/stream/webhook/deleted` (alias: `/webhook/deleted`)  
   Webhook receiver for Jellyfin's Webhook plugin (`NotificationType: ItemDeleted`). Receives deleted item payloads and automatically unmounts the corresponding item and reconciles leftover stubs.
 - `GET /api/stream/resume` (alias: `/stream/resume`)  
-  Queries Jellyfin `/UserItems/Resume` to extract movies and episodes currently in-progress for the user. Automatically resolves parent series `tconst` if episode items lack direct IMDb IDs, calculates duration and resume percentage, and provides image URLs for the home "Continue Watching" shelf:
+  Queries SQLite database (`data/tracker-proxy/cineclaw.db`) for items currently in-progress (2% <= progress < 90%) and deduplicated next episodes for TV series. Automatically enriches missing titles, backdrops, and poster paths via `imdb-indexer` (`/api/movie/{tconst}/metadata`), resolves episode stills via TMDB episodes API, persists enriched attributes back to SQLite, and formats high-resolution 16:9 backdrop URLs (`https://image.tmdb.org/t/p/w780/...`) with guaranteed fallback to `/poster/{tconst}?size=w500`:
   ```json
   [
     {
-      "item_id": "cdbb4fbba2a1c99efef3062a840ce59c",
-      "tconst": "tt14688458",
-      "title": "Укрытие",
-      "series_name": "Укрытие",
-      "episode_title": "Сын уборщика",
-      "media_type": "Episode",
-      "season_number": 1,
-      "episode_number": 5,
-      "duration_seconds": 3563.782,
-      "resume_seconds": 13.485938,
-      "played_percentage": 0.3784164687963517,
-      "image_url": "/jellyfin/Items/cdbb4fbba2a1c99efef3062a840ce59c/Images/Primary"
+      "item_id": "tt34564059",
+      "tconst": "tt34564059",
+      "title": "Бегущая",
+      "series_name": "Бегущая",
+      "media_type": "Movie",
+      "duration_seconds": 5150.584,
+      "resume_seconds": 743.836253,
+      "played_percentage": 14.441784718004794,
+      "image_url": "https://image.tmdb.org/t/p/w780/jzBWExXacS33rMQ2zLBrqIVweyG.jpg"
     }
   ]
   ```
+- `DELETE /api/stream/resume` (aliases: `POST /api/stream/resume/remove`, `/stream/resume/remove`)  
+  Removes watch progress records for a movie, episode, or series from SQLite. Accepts `{"item_id": "...", "tconst": "...", "season": N, "episode": M, "is_next_up": true/false, "all": true/false}` via JSON body or query parameters. Automatically clears all history for movies and next-up shows, or targets specific episode records.
 - `GET /api/stream/player/info?tconst=...&season=N&episode=M` (alias: `/stream/player/info`)  
-  Fetches comprehensive playback metadata for the embedded cinema player (`CinemaPlayerModal`). Formats Russian natural titles (`Сезон N, серия M — Название`), surfaces all audio tracks (Dolby Digital Plus, Atmos, EAC3, AC3, AAC) and subtitles (VTT delivery URLs), resolves next episodes, and constructs the HLS master playlist URL using fMP4 fragmented MP4 segments (`SegmentContainer=mp4&MinSegments=2&BreakOnNonKeyFrames=True&VideoCodec=h264&AudioCodec=aac`) without `EnableAutoStreamCopy=true`, ensuring fast transcode/remux on any browser even for 4K HEVC HDR/DV content.
+  Fetches comprehensive playback metadata for the embedded cinema player (`CinemaPlayerModal`). Surfaces all probed audio tracks (Russian dub, Original, etc.) and subtitles, resolves next episodes, and constructs:
+  1. `stream_url`: `/gst/{hash}/master.m3u8?id={idx}&audio={audio}` for embedded web player with zero-transcode GStreamer remuxing and AAC conversion.
+  2. `direct_stream_url`: `/torr/stream/<filename>?link={hash}&index={idx}&play` for external native players (VLC, IINA, Infuse) and Android TV Media3 ExoPlayer capable of multi-channel pass-through.
+  3. `transcode_profiles`: List of available real-time transcoding profiles (`direct`, `1080p`, `720p`, `480p`, `360p`) for bandwidth-constrained playback.
+- `GET /api/stream/transcode/profiles`  
+  Returns array of available transcode profiles with label, bitrates, resolution caps, and direct-stream flags.
+- `GET /api/stream/transcode/{hash}/master.m3u8?profile={id}&file_idx={idx}&audio={audio}&start={startSec}&s={sessionId}`  
+  Spawns or retrieves an on-demand FFmpeg transcode session targeting TorrServer's HTTP stream with input seek (`-ss`), ultrafast x264 re-encoding, AAC stereo downmixing, and rolling HLS packaging (`-hls_time 3`). Rewrites segment references to `/api/stream/transcode/seg/{sessionId}/seg_{index}.ts`.
+- `GET /api/stream/transcode/seg/{sessionId}/{filename}`  
+  Serves generated MPEG-TS segment file and updates the session's last activity timestamp.
+- `POST /api/stream/transcode/stop`  
+  Immediately terminates active FFmpeg transcode processes for a specific torrent hash (or all sessions if hash is empty) and frees temporary directories (`os.RemoveAll`). Also invoked automatically when player closes or switches items.
 
 ---
 
@@ -300,27 +330,51 @@ Because Jellyfin library files are symbolic links pointing to `/media/virtual/`,
   - Supports separate cache keys: `hotlist_movie`, `hotlist_tv`, `hotlist_anime`, `hotlist_doc`.
   - Supports on-the-fly resolution filtering: when `quality=4k`, returns only titles offering verified 4K UHD torrents.
 - **Endpoints**:
-  - `GET /torrents/hotlist?type=movie|tv|anime|doc&quality=4k&page=1&limit=20` (alias: `GET /api/stream/hotlist`)
+  - `GET /torrents/hotlist?type=movie|tv|new_movie|new_tv|anime|doc&quality=4k&page=1&limit=20` (alias: `GET /api/stream/hotlist`)
   - Supports query parameter `?refresh=true` (or `?refresh_cache=true`) to force an immediate background re-scrape.
-  - Returns `{ "id": "tracker_hotlist", "title": "Популярно на трекерах", "media_type": "...", "page": 1, "total_pages": ..., "total_results": ..., "items": [...] }`.
+  - `type=new_movie`: Scrapes fresh movie releases from RuTor categories `1` (foreign), `5` (Russian), `7` (animation) sorted by publication date descending (`/browse/<page>/<cat>/0/0`), filtered strictly by `Year >= 2025`.
+  - `type=new_tv`: Scrapes fresh TV series releases from RuTor categories `4` (foreign) and `16` (Russian) sorted by publication date descending (`/browse/<page>/<cat>/0/0`), filtered strictly by `Year >= 2025` and deduplicated by series title.
+  - Returns `{ "id": "tracker_fresh" | "tracker_hotlist", "title": "...", "media_type": "...", "page": 1, "total_pages": ..., "total_results": ..., "items": [...] }`.
 
 ---
 
 ## 11. Native BitTorrent Streaming & SQLite Playback Engine (`pkg/stream`, `pkg/playback`)
 
-- **TorrServer MatriX Orchestrator (`pkg/stream/torrclient.go`)**:
+- **TorrServer MatriX Orchestrator (`pkg/stream/torrclient.go`, `pkg/stream/service.go`)**:
   - Adds torrents directly to TorrServer via `POST /torrents` (`action: "add"`, `link: magnet`, `save_to_db: true`).
   - Fetches torrent file stats, file lists, and swarm health via `POST /torrents` (`action: "get"`).
-  - Robust season and episode file parsing (`ParseSeasonEpisode`) mapping regex filenames (`S01E02`, `1x02`, `Сезон 1/02.mkv`) directly to TorrServer file indices.
-  - Probes audio and subtitle streams via TorrServer probe API (`POST /probe`).
-  - GStreamer remuxing delivers HLS master playlist on `/torr/gst/<hash>/master.m3u8?index=<file-id>&audio=<audio-idx>` with zero-transcode video passthrough and AAC stereo audio transcoding.
-  - Subtitles served dynamically as WebVTT on `/torr/gst/<hash>/subs/<idx>.m3u8`.
+  - **Multi-Season & Collection Pack File Mapping Engine (`MatchFile`, `ParseSeasonEpisodeRange`)**:
+    - **Directory & Russian Folder Parsing**: Recursively extracts season numbers from directory structures from deepest to root, supporting `1 сезон`, `2 сезон`, `2-й сезон`, `2-ой сезон`, `Сезон 2`, `Сезон.2`, `Season.02`, `Show.S02.1080p`, `[S02]`, and Roman numerals (`Сезон II`, `II сезон`).
+    - **Episode Range & 3-Digit Support**: Parses episode ranges (`S02E01-E02`, `01-02 серии`, `01-02.mkv`) mapping requests for either episode directly to the multi-episode file. Supports classic 3-digit episode formats (`204.mkv` -> S02E04).
+    - **4-Pass Resolution Hierarchy**:
+      1. *Pass 1 (Exact Match)*: Matches explicit season and episode/range (`pv.season == season && episode >= pv.epStart && episode <= pv.epEnd`).
+      2. *Pass 2 (In-Season Search)*: Restricts search strictly to files within the detected season folder:
+         - *Pass 2a*: In-season fuzzy token search (`e04`, `ep04`, `серия 4`).
+         - *Pass 2b*: Continuous/absolute numbering offset (e.g. Season 2 with files `14.mkv..26.mkv` offsets to absolute index `minEp + episode - 1`).
+         - *Pass 2c*: Alphanumeric natural sort fallback (`naturalLess`), correctly picking the $E$-th file of that season.
+      3. *Strict Multi-Season Invariant*: If a torrent contains files across multiple seasons (`isMultiSeason == true`), cross-season matching is strictly forbidden. Any request for Season $N$ that cannot be satisfied returns an explicit error (`episode S%02dE%02d not found in multi-season pack`) and never leaks into Season 1.
+      4. *Pass 3 (Single-Season Fallback)*: Only engaged when `!isMultiSeason`. For `season > 1`, requires season confirmation in the torrent title, eliminating movie and unrelated release leakage.
+    - **Self-Healing Auto-Resolve**: If the current torrent lacks the requested season/episode, `GetPlayerInfo` automatically queries the aggregator specifically for that season, mounts the correct season pack into TorrServer, and streams without disruption.
+  - **Self-Healing Season Auto-Mount**: If an episode of a TV show is requested before a torrent is mounted or if TorrServer was restarted, `GetPlayerInfo` automatically queries the bbolt cache/aggregator, selects the top-seeded release matching that season, resolves infohash/magnet, mounts it into TorrServer, and streams without error.
+  - **Direct HTTP Range Streaming (`/torr/stream`)**: Direct zero-transcode HTTP streaming gateway from TorrServer (`/torr/stream/<filename>?link=<hash>&index=<idx>&play`). Supports standard HTTP Range requests (`206 Partial Content`), allowing the browser HTML5 `<video>` element to instantly seek to any keyframe (<0.8s load time) directly from TorrServer's cache without custom segmentation.
+  - **TorrServer GStreamer 1.24 Distribution (`torrserver-gst/Dockerfile`)**:
+    - Packaged inside Ubuntu 24.04 runtime with GStreamer 1.24 libraries (`gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, `gstreamer1.0-plugins-bad`, `gstreamer1.0-plugins-ugly`, `gstreamer1.0-libav`) and official `TorrServer-gst-linux-${arch}`.
+    - Built-in GStreamer engine (`/gst/settings` -> `{"built_in": true}`) provides rapid media probing via `GET /gst/:hash/probe?id=<idx>` (~1.8s response time), returning all video, audio, and subtitle streams directly from the BitTorrent swarm header.
+    - Codec normalizers (`cleanVideoCodec`, `cleanAudioCodec`) strip verbose GStreamer caps format into standard tokens (`H.264`, `HEVC`, `AV1`, `AC3`, `E-AC3`, `DTS`, `AAC`).
+    - **Intelligent Audio Track Selection (`selectDefaultAudioTrack`)**: Scores audio tracks to prioritize Russian dubbing (DUB > MVO > Russian language tracks > 6-channel audio), eliminating accidental default selection of foreign audio pads.
+    - **Dynamic HLS Audio Track Switching & Demux Isolation**: Exposes `/gst/:hash/master.m3u8?id=<fileId>&audio=<idx>` enabling Hls.js in web clients to switch audio tracks on the fly with zero transcoding. Generates segment URLs scoped with `?audio=<idx>` to eliminate segment cache pollution across track switches. Runner pipeline re-arms on track change with clean fMP4 initialization headers.
+    - **Low-Peer Swarm Protection & Resilient Probing**: Guarded `churnIfUselessForWarmup` in `anacrolix-torrent` (`minConnsToChurn = 25`, complete seeders immune), preserving scarce seeders in Russian multi-season packs (e.g. *The Sopranos*). Extended TorrServer probe timeout to 35s in `TorrClient` and frontend polling retries to 30 attempts (45s total).
+    - Exposes `direct_stream_url` for external players (VLC, IINA, Infuse).
 - **Pure-Go SQLite Media Database (`pkg/db/sqlite.go`, `pkg/playback/store.go`)**:
   - Managed using `modernc.org/sqlite` (pure Go, zero CGo requirement).
   - WAL mode enabled for high-concurrency read/write operations without locking.
   - `watch_progress`: Stores watch time (`position_seconds`), runtime (`duration_seconds`), completion percentage (`playback_percent`), watched state (`is_completed`), torrent hash, link, and file index.
-  - Conflict-safe updates preserving existing durations and calculating real-time percentages.
+  - **Zero-Wipe Position Preservation**: `SaveProgress` guarantees that existing playback positions are never wiped to 0 when re-mounting releases:
+    `position_seconds = CASE WHEN excluded.position_seconds > 0 THEN excluded.position_seconds ELSE watch_progress.position_seconds END`.
+  - Seamless quality switching pipeline: `MountTorrent` accepts `position_seconds` and `episode`, automatically preserving watch progress in SQLite and passing the resume target to the player.
   - Deduplicated Resume shelf (`GetResumeList`) returning currently in-progress titles with accurate elapsed times.
+  - 1-click removal (`DELETE /api/playback/progress?tconst=...`) with confirmation modal and optimistic UI updates.
+  - Helper queries: `GetLatestWatchedEpisodeForSeason` and `GetWatchedSeasons` enabling exact per-season progress tracking and rich mount status responses.
 - **Next Up Episode Engine (`pkg/playback/nextup.go`)**:
   - Compares user's watched episodes in SQLite with series season episode manifests from `imdb-indexer` (`/api/series/:tconst/episodes`).
   - Automatically identifies the next sequential episode (e.g. S01E04 when S01E03 finishes) or first episode of the next season.
@@ -328,5 +382,91 @@ Because Jellyfin library files are symbolic links pointing to `/media/virtual/`,
 - **External Player Launchers**:
   - Direct streams to TorrServer port `8092` (`http://<host>:8092/stream?link=<hash>&index=<idx>&play`).
   - Deep linking protocol schemes supported: VLC (`vlc://`), IINA (`iina://weblink?url=...`), Infuse (`infuse://x-callback-url/play?url=...`), and clipboard stream link copy.
+
+---
+
+## 12. Persistent Watchlist («Буду смотреть») (`pkg/playback/watchlist_store.go`)
+
+- **Table Schema**:
+  ```sql
+  CREATE TABLE IF NOT EXISTS media_watchlist (
+      imdb_id TEXT PRIMARY KEY,
+      media_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      original_title TEXT,
+      year INTEGER,
+      rating REAL,
+      poster_path TEXT,
+      backdrop_path TEXT,
+      added_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_watchlist_added ON media_watchlist(added_at DESC);
+  ```
+- **Endpoints**:
+  - `GET /api/watchlist` (alias: `/api/playback/watchlist`) — returns all saved titles ordered by `added_at DESC`.
+  - `POST /api/watchlist` — saves title with metadata.
+  - `DELETE /api/watchlist?imdb_id=...` — removes title from watchlist.
+  - `GET /api/watchlist/check?imdb_id=...` — returns `{ "in_watchlist": true|false }`.
+
+---
+
+## 13. Direct HTTP Range Streaming & Transcode Profiles (`pkg/transcode/profiles.go`)
+
+- **Profile List**:
+  - `direct`: ⚡ Исходный (HLS Remux) — zero transcode, GStreamer HLS container remux with audio track selection.
+  - `http_direct`: 🚀 Прямой HTTP (без сегментов) — native TorrServer single-stream HTTP Range request (`/torr/stream/<file>?link=<hash>&index=<idx>&play`, `HTTP 206 Partial Content`) directly into HTML5 `<video>`, completely bypassing HLS segment chopping and GStreamer.
+  - `1080p`: 📱 1080p Full HD (6 Мбит/с) — on-the-fly FFmpeg transcoding for Wi-Fi.
+  - `720p`: 📱 720p HD (3 Мбит/с) — on-the-fly FFmpeg transcoding for cellular (LTE/5G).
+  - `480p`: 📶 480p SD (1.4 Мбит/с) — data-saving profile.
+  - `360p`: 🔋 360p Эконом (700 Кбит/с) — minimal bandwidth profile.
+- **Player Info Exposure**:
+  `GET /api/stream/player/info` supplies `transcode_profiles` array with both `direct` and `http_direct` flags, along with `direct_stream_url` for one-click native HTTP playback.
+
+---
+
+## 14. Persistent Audio Voiceover Preferences (`pkg/playback/store.go`, `pkg/stream/service.go`)
+
+- **Table Schema**:
+  ```sql
+  CREATE TABLE IF NOT EXISTS media_audio_preferences (
+      imdb_id TEXT PRIMARY KEY,
+      audio_title TEXT NOT NULL,
+      audio_index INTEGER NOT NULL DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+  ```
+- **Endpoints & Ingestion**:
+  - `POST /api/playback/audio`: Accepts `{"imdb_id": "...", "audio_title": "...", "audio_index": ...}` to store the user's voiceover choice for a show or movie.
+  - Periodic watch progress reporting (`POST /api/playback/progress`) is strictly guarded: if `audio_title` is omitted or empty, existing preferences are never overwritten.
+- **Semantic Voiceover Matching (`selectDefaultAudioTrackWithPreference`)**:
+  - Automatically matches preferred voiceovers across episodes or different torrent releases based on author/studio keywords: Goblin (`Гоблин`, `Пучков`), Amedia (`Амедиа`), Fox Crime, Serbin (`Сербин`), HDRezka, LostFilm, Кубик в кубе, etc.
+  - Injects matched track as `is_default: true` in `/api/stream/player/info` and dynamically configures `master.m3u8?audio=<idx>`.
+
+---
+
+## 15. Tracker Swarm Hotlist & Clean TMDB Relative Paths (`pkg/hotlist`)
+
+- **Endpoints**:
+  - `GET /torrents/hotlist?type=movie|tv|new_movie|new_tv|anime|doc&quality=4k&page=1&limit=20`
+- **Zero-Disk Clean Path Pipeline**:
+  - `IndexerHit` and `Item` store only pure TMDB relative paths (`poster_path: "/..."`, `backdrop_path: "/..."`).
+  - Legacy `/poster/` prefixes and proxy query strings are completely ignored and stripped in `pkg/hotlist/matcher.go`.
+- **Legacy Cache Auto-Purge**:
+  - In `loadFromDB` and `getItems`, any cached bbolt item whose `poster_path` starts with `/poster/` is detected as legacy format, discarded, and automatically re-fetched and re-matched against the indexer.
+- **bbolt Persistent Caching**:
+  - Stored in bucket `hotlist_items` under keys `movie`, `tv`, `new_movie`, `new_tv`, `anime`, `doc` with a 24-hour TTL and periodic background refreshes.
+
+---
+
+## 16. Sub-Second TTFF, Swarm Re-prioritization & Fast-Probe Decoupling
+
+- **Decoupled Stream Probing (`pkg/stream/service.go`)**:
+  - Previously, `GetPlayerInfo` blocked synchronously on full GStreamer/FFprobe probing (`probeStreamDirect`), causing 5–15 second UI freezes on cold torrents while demuxing audio/subtitles.
+  - Replaced with `probeStreamFast` which enforces a strict 500ms probe window. If metadata is not returned within 500ms, it falls back to safe default stream parameters (`audio: [{"index": 0, "title": "Основная дорожка"}]`) and warms the full probe asynchronously in the background.
+  - Added background probe warming directly inside `MountTorrent` so tracks are probed before the user even opens the player.
+- **TorrServer-Turbo Priority Inversion Fix**:
+  - Removed cache-boundary checks in `cache.go` (`isIdInFileBE`) that previously caused piece requests near file start or boundary limits to be completely ignored by the scheduler.
+  - Enabled unconditional `reader.SetResponsive()` and instant `cache.refreshPriorities()` on reader creation and seeking (`reader.Seek()`).
+  - Swarm priority updates execute concurrently within <1ms, enabling sub-second seeks (185–580ms) and warm series episode switches (<900ms).
 
 

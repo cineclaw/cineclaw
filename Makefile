@@ -4,9 +4,14 @@
 
 SHELL := /bin/bash
 REGISTRY ?= ghcr.io/cineclaw
-VERSION ?= 1.0.0
+VERSION ?= 1.2.0
 PLATFORMS ?= linux/amd64,linux/arm64
 BUILDER ?= multiarch
+
+# Android TV Settings
+TV_IP ?= 192.168.88.127:5555
+TV_PKG := com.cineclaw.tv
+TV_ACTIVITY := $(TV_PKG)/.MainActivity
 
 # Colors for terminal output
 CYAN  := \033[0;36m
@@ -17,7 +22,9 @@ NC    := \033[0m
 
 .PHONY: help login check-builder prune-cache \
         build-local build-frontend-local build-tracker-local build-indexer-local \
-        publish-all publish-frontend publish-tracker publish-indexer \
+        publish-all publish-frontend publish-tracker publish-indexer publish-ai \
+        tv-fast tv-dev tv-release tv-prod tv-build-fast tv-build-release \
+        tv-connect tv-logs tv-stop \
         up down restart logs pull status
 
 help: ## Show this help message
@@ -35,6 +42,15 @@ help: ## Show this help message
 	@echo -e "  $(GREEN)build-indexer-local$(NC) - Build imdb-indexer locally with cargo cache"
 	@echo -e "  $(GREEN)build-tracker-local$(NC) - Build tracker-proxy locally with go cache"
 	@echo -e "  $(GREEN)build-frontend-local$(NC)- Build frontend locally with npm cache"
+	@echo ""
+	@echo -e "$(YELLOW)Android TV Client (Device: $(TV_IP)):$(NC)"
+	@echo -e "  $(GREEN)tv-fast$(NC)             - Fast incremental build & deploy to TV (Debug, no R8, ~3-5s)"
+	@echo -e "  $(GREEN)tv-release$(NC)          - Full heavy build with max optimizations (R8 + Proguard + AOT compile on TV)"
+	@echo -e "  $(GREEN)tv-build-fast$(NC)       - Build Debug APK only without deploying"
+	@echo -e "  $(GREEN)tv-build-release$(NC)    - Build Release APK only without deploying"
+	@echo -e "  $(GREEN)tv-logs$(NC)             - Stream live Android TV logcat"
+	@echo -e "  $(GREEN)tv-connect$(NC)          - Connect ADB to TV ($(TV_IP))"
+	@echo -e "  $(GREEN)tv-stop$(NC)             - Force-stop CineClaw app on TV"
 	@echo ""
 	@echo -e "$(YELLOW)Cache & Maintenance:$(NC)"
 	@echo -e "  $(GREEN)prune-cache$(NC)         - Clear BuildKit compiler cache volumes"
@@ -122,7 +138,18 @@ publish-ai: check-builder ## Build and push cineclaw-ai to GHCR (amd64 + arm64)
 		./cineclaw-ai
 	@echo -e "$(GREEN)✓ Published $(REGISTRY)/cineclaw-ai:$(VERSION) and :latest$(NC)"
 
-publish-all: publish-frontend publish-tracker publish-indexer publish-ai ## Build and push all services to GHCR
+publish-torrserver: check-builder ## Build and push torrserver-gst to GHCR (amd64 + arm64)
+	@echo -e "$(CYAN)Building and pushing $(REGISTRY)/torrserver-gst:$(VERSION) ($(PLATFORMS))...$(NC)"
+	docker buildx build \
+		--platform $(PLATFORMS) \
+		--cache-from type=registry,ref=$(REGISTRY)/torrserver-gst:latest \
+		-t $(REGISTRY)/torrserver-gst:$(VERSION) \
+		-t $(REGISTRY)/torrserver-gst:latest \
+		--push \
+		./torrserver-gst
+	@echo -e "$(GREEN)✓ Published $(REGISTRY)/torrserver-gst:$(VERSION) and :latest$(NC)"
+
+publish-all: publish-frontend publish-tracker publish-indexer publish-ai publish-torrserver ## Build and push all services to GHCR
 	@echo -e "$(GREEN)========================================================$(NC)"
 	@echo -e "$(GREEN)✓ All CineClaw $(VERSION) microservices successfully published to GHCR$(NC)"
 	@echo -e "$(GREEN)========================================================$(NC)"
@@ -190,3 +217,59 @@ pull: ## Pull updated images from GHCR
 
 status: ## Run installation diagnostics
 	./install.sh --status
+
+# ------------------------------------------------------------------------------
+# Android TV Client Automation
+# ------------------------------------------------------------------------------
+
+tv-connect: ## Connect ADB to TV
+	@echo -e "$(CYAN)Connecting ADB to TV at $(TV_IP)...$(NC)"
+	@adb connect $(TV_IP)
+
+tv-build-fast: ## Fast assemble Debug APK (incremental, no R8)
+	@echo -e "$(CYAN)⚡ Building fast Debug APK...$(NC)"
+	@cd android-tv && ./gradlew assembleDebug
+	@echo -e "$(GREEN)✓ Debug APK ready: android-tv/app/build/outputs/apk/debug/app-debug.apk$(NC)"
+
+tv-fast: tv-build-fast ## Fast incremental build & deploy to Android TV (Debug APK, ~3-5s)
+	@echo -e "$(CYAN)Ensuring ADB connection to $(TV_IP)...$(NC)"
+	@adb connect $(TV_IP) >/dev/null 2>&1 || true
+	@echo -e "$(CYAN)Installing fast debug build to TV...$(NC)"
+	@adb -s $(TV_IP) install -r android-tv/app/build/outputs/apk/debug/app-debug.apk
+	@echo -e "$(CYAN)Launching $(TV_ACTIVITY)...$(NC)"
+	@adb -s $(TV_IP) shell am start -n $(TV_ACTIVITY)
+	@echo -e "$(GREEN)========================================================$(NC)"
+	@echo -e "$(GREEN)✓ Fast deploy finished! Running on $(TV_IP)$(NC)"
+	@echo -e "$(GREEN)========================================================$(NC)"
+
+tv-dev: tv-fast ## Alias for tv-fast
+
+tv-build-release: ## Build production Release APK (R8 + resource shrinking + Proguard)
+	@echo -e "$(CYAN)🔨 Building fully optimized Release APK (R8, Proguard)...$(NC)"
+	@cd android-tv && ./gradlew assembleRelease
+	@echo -e "$(GREEN)✓ Release APK ready: android-tv/app/build/outputs/apk/release/app-release.apk$(NC)"
+
+tv-release: tv-build-release ## Heavy build with max optimizations + TV install + on-device AOT speed compile
+	@echo -e "$(CYAN)Ensuring ADB connection to $(TV_IP)...$(NC)"
+	@adb connect $(TV_IP) >/dev/null 2>&1 || true
+	@echo -e "$(CYAN)Installing optimized release build to TV...$(NC)"
+	@adb -s $(TV_IP) install -r android-tv/app/build/outputs/apk/release/app-release.apk
+	@echo -e "$(CYAN)⚡ Compiling on-device AOT machine code (dex2oat speed profile)...$(NC)"
+	@adb -s $(TV_IP) shell cmd package compile -m speed -f $(TV_PKG)
+	@echo -e "$(CYAN)Launching $(TV_ACTIVITY)...$(NC)"
+	@adb -s $(TV_IP) shell am start -n $(TV_ACTIVITY)
+	@echo -e "$(GREEN)========================================================$(NC)"
+	@echo -e "$(GREEN)✓ Heavy release build + AOT compilation complete on $(TV_IP)$(NC)"
+	@echo -e "$(GREEN)========================================================$(NC)"
+
+tv-prod: tv-release ## Alias for tv-release
+
+tv-logs: ## Follow Android TV logcat for CineClaw
+	@echo -e "$(CYAN)Streaming live logs for $(TV_PKG) from $(TV_IP)...$(NC)"
+	adb -s $(TV_IP) logcat -v time | grep --line-buffered -E "CineClaw|ExoPlayer|MediaCodec|TvPlayer|Retrofit"
+
+tv-stop: ## Force stop CineClaw on TV
+	@echo -e "$(YELLOW)Stopping $(TV_PKG) on $(TV_IP)...$(NC)"
+	@adb -s $(TV_IP) shell am force-stop $(TV_PKG)
+	@echo -e "$(GREEN)✓ App stopped$(NC)"
+

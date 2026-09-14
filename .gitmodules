@@ -7,3 +7,15 @@
 [submodule "tracker-proxy"]
 	path = tracker-proxy
 	url = https://github.com/cineclaw/tracker-proxy.git
+[submodule "cineclaw-ai"]
+	path = cineclaw-ai
+	url = https://github.com/cineclaw/cineclaw-ai.git
+[submodule "torrserver-gst"]
+	path = torrserver-gst
+	url = https://github.com/cineclaw/torrserver-gst.git
+[submodule "android-tv"]
+	path = android-tv
+	url = https://github.com/cineclaw/android-tv.git
+[submodule "apple-tv"]
+	path = apple-tv
+	url = https://github.com/cineclaw/apple-tv.git

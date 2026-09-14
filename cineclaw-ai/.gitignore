@@ -1,8 +1,0 @@
-# Binaries
-/cineclaw-ai
-/tmp/
-
-# Data
-/data/
-*.db
-*.log

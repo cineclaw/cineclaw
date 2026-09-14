@@ -5,7 +5,13 @@ Cine-Claw v2 is an extensible, self-hosted media platform designed for fast disc
 
 ```mermaid
 graph TD
-    Client["Browser / PWA / External Client"] -->|Port 3000: Web UI & Protected API| Gateway["Frontend Nginx Edge Proxy (Port 3000)"]
+    Client["Browser / Mobile PWA (React 19, Port 3000)"] -->|Port 3000: Web UI & Protected API| Gateway["Frontend Nginx Edge Proxy (Port 3000)"]
+    TVClient["Android TV Client (Compose TV, Media3)"] -->|REST /api (Feeds, Search, Progress)| Gateway
+    TVClient -->|Direct HTTP Range Streaming (:8092)| TorrServer
+    TVClient -->|Progress Sync (:9118)| Proxy
+    AppleTVClient["Apple TV Client (tvOS 18, SwiftUI, KSPlayer)"] -->|REST /api (Feeds, Search, Progress)| Gateway
+    AppleTVClient -->|Direct MKV / HTTP Range (:8092)| TorrServer
+    AppleTVClient -->|Progress Sync (:9118)| Proxy
     
     subgraph Edge Security & Auth
         Gateway -->|"auth_request /api/auth/verify"| Auth["tracker-proxy /api/auth (Port 9118)"]
@@ -74,8 +80,8 @@ graph TD
 ### Step 1: Instant Title Search
 1. User types in the search bar on the Frontend.
 2. Request hits `GET http://localhost:8090/api/search?q=<query>&limit=10`.
-3. `imdb-indexer` queries its embedded **Tantivy** full-text index and returns results in $<5$ms.
-4. Poster images are proxied through `/api/poster/:tconst` with local disk caching to prevent external rate limits and CORS issues.
+3. `imdb-indexer` queries its embedded **Tantivy** full-text index, enriches hits with `poster_path` and `backdrop_path` from `redb` (`data/imdb-indexer/poster_paths.redb`) or TMDB with rate-limit pacing, and returns results in $<5$ms.
+4. Clients stream artwork directly from TMDB's edge Cloudflare CDN (`https://image.tmdb.org/t/p/{size}{path}`) with responsive resolutions and zero server disk I/O.
 
 ### Step 2: Series Seasons & Metadata Resolution
 1. When a title is opened, if it is a TV series (`titleType == 'tvSeries' | 'tvMiniSeries'`), Frontend requests `GET http://localhost:8090/api/series/:tconst/seasons`.
@@ -142,7 +148,10 @@ graph TD
 | `frontend` | `imdb-indexer` | `GET /api/poster/:tconst` | Cached poster proxy |
 | `frontend` | `tracker-proxy` | `GET /api/torrents?...` | Aggregated & deduped torrents |
 | `frontend` | `tracker-proxy` | `POST /api/torrents/refresh` | Invalidate cache & re-fetch |
-| `frontend` | `tracker-proxy` | `POST /api/stream/mount` | Mount torrent into Tiramisu & Jellyfin |
+| `frontend` | `tracker-proxy` | `POST /api/stream/mount` | Mount torrent into TorrServer & retrieve stream URL |
+| `frontend` | `tracker-proxy` | `POST /api/playback/progress` | Sync watch progress (`position_seconds`, duration) |
+| `frontend` | `torrserver` | `GET /torr/stream/*` | Direct zero-transcode HTTP Range streaming |
+| `frontend` | `torrserver` | `GET /torr/gst/*` | GStreamer HLS remuxing with audio track switching |
 | `frontend` | `cineclaw-ai` | `GET /api/ai/critics/:tconst` | Rotten Tomatoes %, Metascore, awards & AI consensus |
 | `cineclaw-ai` | OMDb | `GET /?i=:tconst&apikey=...` | Critic scores, ratings, and awards |
 | `cineclaw-ai` | TMDB | `GET /3/find/:tconst` & `/3/:type/:id/reviews` | Reviews context for LLM |
@@ -150,10 +159,8 @@ graph TD
 | `tracker-proxy` | `imdb-indexer` | `GET /series/:tconst/episodes` | Fetch episode titles & plots for NFO generation |
 | `tracker-proxy` | `flaresolverr` | `POST /v1` | FlareSolverr Turnstile clearance |
 | `tracker-proxy` | Trackers | HTTP GET / POST | Scrapes RuTracker, RuTor, NNM-Club |
-| `tracker-proxy` | `tiramisu` | `POST /torrents` | Register torrent magnet with GoStorm |
-| `tracker-proxy` | `jellyfin` | `POST /Items/{id}/Refresh` | Targeted library and item refresh |
-| `jellyfin` | `tiramisu` | FUSE VFS (`/media/virtual`) | Sequential piece reading for video streaming |
-| `jellyfin` | `tiramisu` | `POST /plex/webhook` | PlaybackStart/Stop webhook triggering Priority Mode & fast start chunks |
+| `tracker-proxy` | `torrserver` | `POST /torrents` | Add/preload BitTorrent torrents |
+| `tracker-proxy` | `torrserver` | `GET /gst/:hash/probe` | GStreamer rapid audio/subtitle tracks probing |
 
 ---
 

@@ -14,3 +14,11 @@ data/*
 *.log
 *-bin
 tracker-proxy-bin
+
+# Test and scratch artifacts
+*.png
+*.db
+*.db-shm
+*.db-wal
+scratch/
+config.yaml

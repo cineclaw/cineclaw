@@ -25,7 +25,6 @@ services:
     environment:
       - TMDB_API_KEY=${TMDB_API_KEY:-db85bce5bf5bf9bac3c140447bf5ac5d}
       - DATA_DIR=/data
-      - TMDB_CACHE_DIR=/data/posters
     networks:
       - cineclaw-net
 
@@ -83,7 +82,7 @@ services:
       - cineclaw-net
 
   torrserver:
-    image: yourok/torrserver:latest
+    image: ghcr.io/cineclaw/torrserver-gst:${IMAGE_TAG:-latest}
     container_name: torrserver
     restart: unless-stopped
     ports:

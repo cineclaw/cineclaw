@@ -54,7 +54,7 @@ Supports instant local metadata generation and asset pre-downloading for Jellyfi
    - Maps IMDb `tconst` to TMDB `id`.
 2. **Fetch TV Details & Seasons**:
    - `GET /series/:tconst/seasons`
-   - Returns full breakdown of seasons with localized Russian names and `poster_path`, plus `backdrop_path`, `logo_path` (prioritizing Russian logos), `overview`, `genres`, `studio`, `premiered`, `rating`, `status`.
+   - Returns full breakdown of seasons with localized Russian names, `poster_path`, `overview` (season synopsis), `vote_average` (season rating), plus `backdrop_path`, `logo_path` (prioritizing Russian logos), show overview, `genres`, `studio`, `premiered`, `rating`, `status`.
 3. **Fetch Episodes Metadata**:
    - `GET /series/:tconst/episodes`
    - Concurrently fetches all episodes across all seasons in parallel (`futures_util::future::join_all`) with in-memory LRU caching.
@@ -67,11 +67,15 @@ Supports instant local metadata generation and asset pre-downloading for Jellyfi
          "name": "Пилот",
          "overview": "Во время семейного барбекю...",
          "air_date": "1999-01-10",
-         "still_path": "/path-to-screenshot.jpg"
+         "still_path": "/path-to-screenshot.jpg",
+         "vote_average": 7.7,
+         "vote_count": 113,
+         "runtime": 60,
+         "episode_type": "standard"
        }
      ]
      ```
-   - Used by `tracker-proxy` during FUSE mounting to write exact per-episode XML `.nfo` files and download `-thumb.jpg` preview screenshots directly into Jellyfin season folders.
+   - Used by frontend for rich episode cards with stills, runtimes, ratings, and finale badges. Also supports automatic TMDB image proxying and caching via `/poster/:path`, `/poster/tmdb/*`, and `/api/tmdb/image/*`.
 4. **Fetch Rich Movie/Series Metadata & Trailers**:
    - `GET /api/movie/:tconst/metadata`
    - Supports both movies and TV series by resolving TMDB external IDs (`movie_results` / `tv_results`).
@@ -123,16 +127,15 @@ Supports instant local metadata generation and asset pre-downloading for Jellyfi
 
 ---
 
-## 5. Poster Caching Proxy (`/api/poster/:tconst`)
+## 5. Zero-Disk Image Architecture & Direct Edge TMDB CDN Delivery
 
-Directly loading poster images from external CDNs causes CORS restrictions and rate limits:
-- `imdb-indexer` proxies poster images through `GET /poster/:tconst` and `GET /api/poster/:tconst`.
-- **In-Memory URL Caching**: `poster_paths_cache` (LRU, 10k items) stores `tconst -> tmdb_poster_path`, allowing all sizes (`w92`, `w154`, `w185`, `w342`) to download immediately without redundant `/find` and `/images` API queries.
-- **Concurrency Limiting**: Uses a `tokio::sync::Semaphore` (capacity 6) to limit simultaneous TMDB downloads and prevent API rate-limiting or socket stalls.
-- **Fail-Fast Timeout**: 6-second timeout prevents long connection queue stalls.
-- **Atomic Temp Files**: Unique per-task temp files (`tmp.{pid}.{atomic_counter}`) prevent write collisions across sizes.
-- **Disk Caching**: Images are cached to disk under `data/posters/{shard}/{tconst}_{size}.jpg`.
-- **Cache-Control**: Served directly from disk with `Cache-Control: public, max-age=2592000, immutable` and ETag support.
+Directly proxying or downloading image binary files to disk created disk bloat, IOPS bottlenecks, and slow initial rendering:
+- **Direct Edge CDN Delivery**: Client applications (Web React 19 and Android TV) stream images directly from TMDB's edge Cloudflare CDN (`https://image.tmdb.org/t/p/{size}{path}`) with sub-50ms latency.
+- **Embedded `redb` Path Persistence**: Raw relative paths (`poster_path`, `backdrop_path`, ~33 bytes per title) are persisted in `data/imdb-indexer/poster_paths.redb` under `poster_paths` and `backdrop_paths` tables, backed by a 20,000-item in-memory LRU cache (<1µs lookup).
+- **Zero Disk Image Storage**: No JPEG, WebP, or PNG binary data is ever downloaded or saved to disk on the server.
+- **Outbound TMDB Pacing & Backoff**: TMDB lookups via `/3/find/{tconst}` are protected by a 12-permit semaphore and exponential backoff retry on HTTP 429 (Too Many Requests).
+- **Search Hit Auto-Enrichment**: `enrich_search_hits` enriches batches of search results concurrently (`futures_util::future::join_all`), populating `poster_path` and `backdrop_path` directly into the JSON response.
+- **Zero-Redirect Fallback**: Legacy `/poster/:tconst` and `/poster/tmdb/*` endpoints immediately return a lightweight in-memory SVG cinema placeholder without disk IO or 307 redirect chains.
 
 ---
 

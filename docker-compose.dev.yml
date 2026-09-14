@@ -21,3 +21,8 @@ services:
       context: ./cineclaw-ai
     image: cineclaw-ai:dev
 
+  torrserver:
+    build:
+      context: ./torrserver-gst
+    image: cineclaw-torrserver:dev
+

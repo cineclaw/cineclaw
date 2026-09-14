@@ -71,3 +71,8 @@ xcrun devicectl device process launch --device "2C8A3405-B038-5A13-AD87-0B2B7C6A
    - Asynchronous, non-blocking fetching in `DetailsViewModel` via dedicated 60-second `aiSession` URLSession.
    - Resilient decoding with safe default values for all properties (`cached`, `scores`, `pros`, `cons`, `targetAudience`).
    - Server-side bbolt cache integrity (`cineclaw-ai`): only successful LLM syntheses are persisted; errors and cancellations are never cached.
+4. **Server Switching & Authentication State Engine**:
+   - `CineClawTVApp` observes `SessionManager.shared.isPaired`. When unauthenticated or after sign out, it transitions to `AuthView`.
+   - `AuthView` provides full tvOS living room onboarding: quick-select server presets (NAS `192.168.88.19:3000`, Local `127.0.0.1:3000`), manual host/port input with real-time ping detection (`HEAD /`), login & password authentication (`POST /api/auth/login`), and camera QR code / PIN pairing.
+   - `SettingsView` features an explicit «Сервер и авторизация» card with live ping status badge, «Сменить сервер» and «Выйти из аккаунта» action buttons with confirmation alerts that cleanly reset session credentials (`clearSession()`) and route directly to `AuthView`.
+

@@ -490,3 +490,109 @@ On mobile devices (e.g. iOS Safari / iPhone):
   - Tested across $430\text{px}$, $390\text{px}$, and $375\text{px}$ mobile viewports: `docScrollWidth` exactly equals `window.innerWidth` with 0 leaking elements.
   - Tested on desktop $1440 \times 900$: vertical window scrolling functions smoothly (`scrollY` progresses from 0 to 400 with `scrollHeight = 2379px`).
   - Verified edge-to-edge card flow: horizontal carousels touch 100% of the screen width with $0\text{px}$ phantom void.
+
+---
+
+## 17. Web URL Routing, Browser History & Dual Playback Progress Tracking
+
+### 17.1 Web URL Routing & Deep Linking (`frontend/src/lib/router.ts`, `frontend/src/hooks/useAppRouting.ts`)
+To ensure deep-linkability, shareable links, and reliable browser reloads (Cmd+R / F5) without losing active state, the web frontend implements an explicit URL router:
+
+| Route Path | View / Modal | URL Synchronization & Parameters |
+| :--- | :--- | :--- |
+| **`/`** | Home screen | Clears search queries, closes modals, displays curated shelves & continue watching |
+| **`/?q=<query>`** | Search results | Real-time query reflection, debounced search synchronization |
+| **`/movie/:tconst`** | Movie / TV series detail view | Opens `MovieModal`. On hard reload, hydrates document directly from Tantivy via `useSearchMoviesQuery({ q: tconst })` |
+| **`/person/:id`** | Person filmography | Opens `PersonModal` with biography and credits |
+| **`/shelf/:shelfId`** | Shelf full view modal | Opens `ShelfModal` with multi-page grid and pagination |
+| **`/diagnostic`** | Cluster diagnostics | Opens `DiagnosticModal` |
+| **`/watch/:tconst?season=S&episode=E`** | Cinema player screen | Directly opens `CinemaPlayerModal` for film or specific series episode |
+
+#### Proxy Collision Invariant
+In `nginx.conf` and `vite.config.ts`, `/search` is proxied directly to `imdb-indexer:8090`. If the web search route were `/search?q=...`, a browser reload would hit Nginx/Vite and return raw JSON rather than the HTML SPA. The web UI route explicitly uses `/?q=...`, preserving `/search` strictly as an API endpoint.
+
+#### Browser History & Gestures
+- Push vs Replace: Modal openings and screen transitions call `pushRoute(...)` adding historical entries. Live state adjustments within a modal (e.g. changing active season/episode while watching in player) use `replaceRoute(...)`.
+- `popstate` Event Listener: Listens to browser Back/Forward navigation and mobile swipe gestures (`Edge Swipe Back`), gracefully closing modals and restoring state in Redux without reloading the page.
+
+---
+
+### 17.2 Dual Playback Progress Tracking Architecture (`frontend/src/lib/playbackProgress.ts`)
+Watch progress is tracked simultaneously in two independent tiers:
+1. **Remote Tier (Backend SQLite)**: Persisted via `tracker-proxy` (`/api/stream/progress` and `/torrents/playback/stream_progress`), updated periodically during streaming.
+2. **Local Tier (Client `localStorage`)**: High-frequency sub-second resolution store (`STORAGE_KEY = 'cineclaw_playback_progress'`).
+
+#### High-Performance In-Memory Cache & Zero-Loss Invariant
+To guarantee zero lost seconds on reload while maintaining zero main-thread CPU overhead:
+- **In-Memory Cache (`memoryCache`)**: All playback records are cached in RAM. Reads and updates occur in memory (0ms, 0 allocations, no repeated `JSON.parse` cycles), with serialized snapshots flushed to `localStorage`.
+- **Multi-Tab Sync**: A `storage` event listener keeps `memoryCache` synchronized across open browser tabs.
+- **Active Playback Heartbeat**: Local progress is flushed every **5.0 seconds** during uninterrupted playback.
+- **Instant Event-Driven Flush**: Local progress is saved immediately and synchronously down to the exact millisecond on:
+  - Play / Pause toggles (`togglePlay`).
+  - Seeking (`handleSeek`).
+  - Video termination (`onEnded`).
+  - Player close (`handleClosePlayer`).
+  - Tab close, page reload, or backgrounding (`beforeunload`, `pagehide`, and `visibilitychange: hidden`).
+- **Storage Safety**: Pruned automatically to the most recent 200 items (`MAX_LOCAL_RECORDS = 200`) ordered by `updatedAt`, fully wrapped in `try/catch` guards for private browsing and quota safety.
+
+#### Strict Local Priority Invariant (`resolveEffectiveResumeTime`)
+When resolving resume timestamps across the application:
+$$\text{effectiveResume} = \max(\text{remotePosition}, \text{localPosition})$$
+If the local progress is further ahead than the remote database (e.g. from sub-second local saves before the remote batch sync occurred), **local progress always wins**.
+
+#### Application-Wide Progress Overlay
+The resolved effective progress is unified across all UI surfaces:
+- **`CinemaPlayerModal`**: Uses `resolveEffectiveResumeTime` for initial `targetSeekTime`, `hasResume` flags, resume prompt dialogs, and initial report start.
+- **`ContinueWatchingShelf`**: Overlays `effectiveResume` on cards if local progress is further ahead than remote, guaranteeing the progress bar reflects the latest watch state.
+- **`SeriesEpisodeBrowser`**: Enriches episode cards with local progress overrides, reflecting exact viewed durations per episode.
+- **Item Removal**: Removing an item from Continue Watching (`handleRemove`) simultaneously deletes the remote SQLite record and prunes local progress via `removeLocalPlayback(itemId)`.
+
+---
+
+## 18. Network Auto-Recovery, Poor Connection Adaptation & Offline Handling
+
+### 18.1 The Permanent Buffering Problem
+Under real-world mobile internet and fluctuating Wi-Fi conditions (cell handovers, signal drops in tunnels/elevators, packet loss), streaming players frequently encounter broken TCP sockets or delayed video chunks. In conventional video players:
+1. When network chunks fail to arrive, HTML5 `<video>` enters the `waiting` state and sets `isBuffering(true)`.
+2. Hls.js runs through its internal fragment retry limit (`fragLoadingMaxRetry`). Once exhausted, it enters an unrecoverable fatal error state or remains permanently suspended on a dead XMLHttpRequest/fetch promise.
+3. Native `<video>` in HTTP direct Range streaming (`HTTP 206`) stays permanently frozen on broken sockets.
+4. The user was previously forced to refresh the entire browser page (`Cmd+R` / `F5`) to re-establish the connection.
+
+### 18.2 Multi-Tier Stream Auto-Recovery Pipeline (`CinemaPlayerModal.tsx`)
+The player implements a self-healing auto-recovery engine that monitors buffering duration, network availability, and connection health:
+
+| Stall Duration / Event | Recovery Action | User Interface Feedback |
+| :--- | :--- | :--- |
+| **0 – 4s stall** | Micro-gap hole jump ($\le 2.5$s) or $+0.08$s decoder nudge | Transparent, no blocking spinner |
+| **4s – 7s stall** | Soft HLS recovery: `hls.recoverMediaError()` and `hls.startLoad(currentTime)` | «Буферизация потока...» spinner |
+| **$\ge 7$s stall** | Hard clean stream reconnect: synchronizes local progress, destroys dead engine instance, initializes fresh `Hls` at exact timestamp | «Восстановление потока (попытка N/5)...» |
+| **5 failed retries** | Pauses automatic retries to conserve device battery and cellular data | Centered Obsidian card: «Связь потеряна» with manual **«🔄 Возобновить просмотр»** button |
+| **Browser `offline` event** | Halts retry loop, flushes current timestamp to `localStorage` | Status indicator: «Ожидание сети...» |
+| **Browser `online` event** | Instantly awakens player, resets attempt counters, triggers immediate stream reconnect | Status badge: «Связь восстанавливается...», auto-resumes |
+
+### 18.3 Fast-Fail & Resilient Network Hls.js Configuration
+To prevent the player from freezing for 20+ seconds on a single hung segment, Hls.js is configured with aggressive fail-fast timeouts:
+- `fragLoadingTimeOut: 10000`: Down from 20s. Fragments hanging $>10$s are aborted and retried immediately.
+- `fragLoadingMaxRetry: 8`, `fragLoadingRetryDelay: 1000`, `fragLoadingMaxRetryTimeout: 30000`: Exponential backoff retries.
+- `maxBufferLength: 30`: On poor connections, a 30s buffer prevents overloading scarce bandwidth on distant frames.
+- `maxMaxBufferLength: 60`.
+
+### 18.4 Exhausted Retries Policy (Metro / Elevator / Dead Zone Handling)
+When a user travels through an area with no reception (e.g. subway tunnel, elevator, underground parking):
+1. The player attempts 5 progressive reconnects over $\sim 35$ seconds.
+2. If the connection remains dead, auto-retries cease. This avoids flooding failed requests or draining mobile battery.
+3. An Obsidian cinema modal displays:
+   - Icon: `WifiOff`;
+   - Title: *«Связь потеряна»* (or *«Нет подключения к интернету»* if `navigator.onLine === false`);
+   - Message informing the user that playback can be resumed once signal returns;
+   - Primary action: **«🔄 Возобновить просмотр»** — resets retry counter and seamlessly restarts stream at exact current timestamp;
+   - Secondary action: **«Сменить качество / раздачу»** — opens quality selector to switch to a smaller file.
+4. **Reactive Online Wake-Up**: If the browser's `online` event fires while in this state (user walked out of the elevator into coverage), the player immediately awakens and re-connects automatically.
+
+### 18.5 Adaptive Quality Suggestion for Weak Networks
+- The watchdog tracks buffering events in a 60-second sliding window (`recentStallsRef`).
+- If $\ge 3$ stalls occur within 60 seconds (indicating insufficient bandwidth for the selected release bitrate, e.g. streaming 40 Mbps 4K on a 5 Mbps link):
+  - An animated adaptive suggestion banner appears:
+    *«Нестабильная связь. Рекомендуем снизить качество для непрерывного просмотра»* with a 1-click **«Сменить»** button opening the quality menu.
+
+

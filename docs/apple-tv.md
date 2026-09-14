@@ -62,7 +62,9 @@ xcrun devicectl device process launch --device "2C8A3405-B038-5A13-AD87-0B2B7C6A
 
 ## 4. Key Architectural Invariants
 
-1. **Direct Stream Priority**: Raw Matroska files (`.mkv`) are streamed directly to KSPlayer via HTTP Range requests. Never transcode to HLS unless playing in a web browser.
+1. **Direct Stream Priority & Legacy Hardware Fallback**:
+   - On hardware supporting HEVC (Apple TV 4K, A10X/A12/A15), raw Matroska files (`.mkv`) are streamed directly to KSPlayer via HTTP Range requests without transcoding.
+   - On legacy hardware without hardware HEVC decoding (Apple TV HD, `AppleTV5,3` with Apple A8) or when the user enables Transcode mode in Settings/Player, video is transcoded on-the-fly on the server to H.264 (`/api/stream/transcode/.../master.m3u8`), allowing smooth hardware decoding at 60fps with zero frame drops.
 2. **Watched State Synchronization**:
    - Continuous playback progress is pushed to `/api/playback/progress` every 5 seconds.
    - Reaching $\ge 90\%$ triggers automatic completion and advances Next Up to the succeeding episode.
@@ -75,4 +77,11 @@ xcrun devicectl device process launch --device "2C8A3405-B038-5A13-AD87-0B2B7C6A
    - `CineClawTVApp` observes `SessionManager.shared.isPaired`. When unauthenticated or after sign out, it transitions to `AuthView`.
    - `AuthView` provides full tvOS living room onboarding: quick-select server presets (NAS `192.168.88.19:3000`, Local `127.0.0.1:3000`), manual host/port input with real-time ping detection (`HEAD /`), login & password authentication (`POST /api/auth/login`), and camera QR code / PIN pairing.
    - `SettingsView` features an explicit «Сервер и авторизация» card with live ping status badge, «Сменить сервер» and «Выйти из аккаунта» action buttons with confirmation alerts that cleanly reset session credentials (`clearSession()`) and route directly to `AuthView`.
+5. **Server-Remembered Source Synchronization**:
+   - Before falling back to automatic release cascades, `HomeViewModel` and `DetailsViewModel` query `getPlayerInfo` (`GET /api/stream/player/info?tconst=...&season=...&episode=...`).
+   - If `mediaSourceId` exists (i.e. release was already chosen/mounted on Web or another client), Apple TV immediately reuses that exact torrent hash and file index, eliminating desynchronization across devices.
+6. **Persistent Transcoding & Quality Memory (`UserDefaults`)**:
+   - User transcoding preferences (`PlaybackMode`: `auto`, `transcodeH264`, `direct`; `transcodeQuality`: `1080p`, `720p`, `480p`) are persisted across app sessions in `UserDefaults`.
+   - In-player transport menu allows dynamic on-the-fly switching between Direct MKV and H.264 transcode with exact timestamp preservation.
+   - Audio track switching during transcoding re-requests the HLS master playlist with `&audio=X` at the current timecode, seamlessly synchronizing voiceovers (e.g. Goblin, NTV, original) without player crash.
 

@@ -228,14 +228,14 @@ tv-connect: ## Connect ADB to TV
 
 tv-build-fast: ## Fast assemble Debug APK (incremental, no R8)
 	@echo -e "$(CYAN)⚡ Building fast Debug APK...$(NC)"
-	@cd android-tv && ./gradlew assembleDebug
-	@echo -e "$(GREEN)✓ Debug APK ready: android-tv/app/build/outputs/apk/debug/app-debug.apk$(NC)"
+	@cd android-tv && ./gradlew assembleTvDebug
+	@echo -e "$(GREEN)✓ Debug APK ready: android-tv/app/build/outputs/apk/tv/debug/app-tv-debug.apk$(NC)"
 
 tv-fast: tv-build-fast ## Fast incremental build & deploy to Android TV (Debug APK, ~3-5s)
 	@echo -e "$(CYAN)Ensuring ADB connection to $(TV_IP)...$(NC)"
 	@adb connect $(TV_IP) >/dev/null 2>&1 || true
 	@echo -e "$(CYAN)Installing fast debug build to TV...$(NC)"
-	@adb -s $(TV_IP) install -r android-tv/app/build/outputs/apk/debug/app-debug.apk
+	@adb -s $(TV_IP) install -r android-tv/app/build/outputs/apk/tv/debug/app-tv-debug.apk
 	@echo -e "$(CYAN)Launching $(TV_ACTIVITY)...$(NC)"
 	@adb -s $(TV_IP) shell am start -n $(TV_ACTIVITY)
 	@echo -e "$(GREEN)========================================================$(NC)"
@@ -246,14 +246,14 @@ tv-dev: tv-fast ## Alias for tv-fast
 
 tv-build-release: ## Build production Release APK (R8 + resource shrinking + Proguard)
 	@echo -e "$(CYAN)🔨 Building fully optimized Release APK (R8, Proguard)...$(NC)"
-	@cd android-tv && ./gradlew assembleRelease
-	@echo -e "$(GREEN)✓ Release APK ready: android-tv/app/build/outputs/apk/release/app-release.apk$(NC)"
+	@cd android-tv && ./gradlew assembleTvRelease
+	@echo -e "$(GREEN)✓ Release APK ready: android-tv/app/build/outputs/apk/tv/release/app-tv-release.apk$(NC)"
 
 tv-release: tv-build-release ## Heavy build with max optimizations + TV install + on-device AOT speed compile
 	@echo -e "$(CYAN)Ensuring ADB connection to $(TV_IP)...$(NC)"
 	@adb connect $(TV_IP) >/dev/null 2>&1 || true
 	@echo -e "$(CYAN)Installing optimized release build to TV...$(NC)"
-	@adb -s $(TV_IP) install -r android-tv/app/build/outputs/apk/release/app-release.apk
+	@adb -s $(TV_IP) install -r android-tv/app/build/outputs/apk/tv/release/app-tv-release.apk
 	@echo -e "$(CYAN)⚡ Compiling on-device AOT machine code (dex2oat speed profile)...$(NC)"
 	@adb -s $(TV_IP) shell cmd package compile -m speed -f $(TV_PKG)
 	@echo -e "$(CYAN)Launching $(TV_ACTIVITY)...$(NC)"

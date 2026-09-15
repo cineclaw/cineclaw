@@ -228,14 +228,14 @@ tv-connect: ## Connect ADB to TV
 
 tv-build-fast: ## Fast assemble Debug APK (incremental, no R8)
 	@echo -e "$(CYAN)⚡ Building fast Debug APK...$(NC)"
-	@cd android-tv && ./gradlew assembleDebug
-	@echo -e "$(GREEN)✓ Debug APK ready: android-tv/app/build/outputs/apk/debug/app-debug.apk$(NC)"
+	@cd android-tv && ./gradlew assembleTvDebug
+	@echo -e "$(GREEN)✓ Debug APK ready: android-tv/app/build/outputs/apk/tv/debug/app-tv-debug.apk$(NC)"
 
 tv-fast: tv-build-fast ## Fast incremental build & deploy to Android TV (Debug APK, ~3-5s)
 	@echo -e "$(CYAN)Ensuring ADB connection to $(TV_IP)...$(NC)"
 	@adb connect $(TV_IP) >/dev/null 2>&1 || true
 	@echo -e "$(CYAN)Installing fast debug build to TV...$(NC)"
-	@adb -s $(TV_IP) install -r android-tv/app/build/outputs/apk/debug/app-debug.apk
+	@adb -s $(TV_IP) install -r android-tv/app/build/outputs/apk/tv/debug/app-tv-debug.apk
 	@echo -e "$(CYAN)Launching $(TV_ACTIVITY)...$(NC)"
 	@adb -s $(TV_IP) shell am start -n $(TV_ACTIVITY)
 	@echo -e "$(GREEN)========================================================$(NC)"
@@ -246,14 +246,14 @@ tv-dev: tv-fast ## Alias for tv-fast
 
 tv-build-release: ## Build production Release APK (R8 + resource shrinking + Proguard)
 	@echo -e "$(CYAN)🔨 Building fully optimized Release APK (R8, Proguard)...$(NC)"
-	@cd android-tv && ./gradlew assembleRelease
-	@echo -e "$(GREEN)✓ Release APK ready: android-tv/app/build/outputs/apk/release/app-release.apk$(NC)"
+	@cd android-tv && ./gradlew assembleTvRelease
+	@echo -e "$(GREEN)✓ Release APK ready: android-tv/app/build/outputs/apk/tv/release/app-tv-release.apk$(NC)"
 
 tv-release: tv-build-release ## Heavy build with max optimizations + TV install + on-device AOT speed compile
 	@echo -e "$(CYAN)Ensuring ADB connection to $(TV_IP)...$(NC)"
 	@adb connect $(TV_IP) >/dev/null 2>&1 || true
 	@echo -e "$(CYAN)Installing optimized release build to TV...$(NC)"
-	@adb -s $(TV_IP) install -r android-tv/app/build/outputs/apk/release/app-release.apk
+	@adb -s $(TV_IP) install -r android-tv/app/build/outputs/apk/tv/release/app-tv-release.apk
 	@echo -e "$(CYAN)⚡ Compiling on-device AOT machine code (dex2oat speed profile)...$(NC)"
 	@adb -s $(TV_IP) shell cmd package compile -m speed -f $(TV_PKG)
 	@echo -e "$(CYAN)Launching $(TV_ACTIVITY)...$(NC)"
@@ -272,4 +272,64 @@ tv-stop: ## Force stop CineClaw on TV
 	@echo -e "$(YELLOW)Stopping $(TV_PKG) on $(TV_IP)...$(NC)"
 	@adb -s $(TV_IP) shell am force-stop $(TV_PKG)
 	@echo -e "$(GREEN)✓ App stopped$(NC)"
+
+# ------------------------------------------------------------------------------
+# Android Automotive & Car Client Automation (Lynk & Co 900 & Car Boxes)
+# ------------------------------------------------------------------------------
+
+AUTO_IP ?= 192.168.88.130:5555
+AUTO_PKG := com.cineclaw.auto
+AUTO_ACTIVITY := $(AUTO_PKG)/com.cineclaw.tv.MainActivity
+
+auto-connect: ## Connect ADB to Car Infotainment / Car Box
+	@echo -e "$(CYAN)Connecting ADB to Car at $(AUTO_IP)...$(NC)"
+	@adb connect $(AUTO_IP)
+
+auto-build-fast: ## Fast assemble Auto Debug APK (incremental, no R8)
+	@echo -e "$(CYAN)⚡ Building fast Auto Debug APK...$(NC)"
+	@cd android-tv && ./gradlew assembleAutoDebug
+	@echo -e "$(GREEN)✓ Auto Debug APK ready: android-tv/app/build/outputs/apk/auto/debug/app-auto-debug.apk$(NC)"
+
+auto-fast: auto-build-fast ## Fast incremental build & deploy to Car (Debug APK)
+	@echo -e "$(CYAN)Ensuring ADB connection to $(AUTO_IP)...$(NC)"
+	@adb connect $(AUTO_IP) >/dev/null 2>&1 || true
+	@echo -e "$(CYAN)Installing fast debug build to Car...$(NC)"
+	@adb -s $(AUTO_IP) install -r android-tv/app/build/outputs/apk/auto/debug/app-auto-debug.apk
+	@echo -e "$(CYAN)Launching $(AUTO_ACTIVITY)...$(NC)"
+	@adb -s $(AUTO_IP) shell am start -n $(AUTO_ACTIVITY)
+	@echo -e "$(GREEN)========================================================$(NC)"
+	@echo -e "$(GREEN)✓ Fast deploy finished! Running on $(AUTO_IP)$(NC)"
+	@echo -e "$(GREEN)========================================================$(NC)"
+
+auto-dev: auto-fast ## Alias for auto-fast
+
+auto-build-release: ## Build production Auto Release APK (R8, Lynk & Co 900 / Car Box)
+	@echo -e "$(CYAN)🔨 Building fully optimized Auto Release APK (R8, Proguard)...$(NC)"
+	@cd android-tv && ./gradlew assembleAutoRelease
+	@echo -e "$(GREEN)✓ Auto Release APK ready: android-tv/app/build/outputs/apk/auto/release/app-auto-release.apk$(NC)"
+
+auto-release: auto-build-release ## Heavy build with max optimizations + Car install + on-device AOT speed compile
+	@echo -e "$(CYAN)Ensuring ADB connection to $(AUTO_IP)...$(NC)"
+	@adb connect $(AUTO_IP) >/dev/null 2>&1 || true
+	@echo -e "$(CYAN)Installing optimized auto release build to Car...$(NC)"
+	@adb -s $(AUTO_IP) install -r android-tv/app/build/outputs/apk/auto/release/app-auto-release.apk
+	@echo -e "$(CYAN)⚡ Compiling on-device AOT machine code (dex2oat speed profile)...$(NC)"
+	@adb -s $(AUTO_IP) shell cmd package compile -m speed -f $(AUTO_PKG)
+	@echo -e "$(CYAN)Launching $(AUTO_ACTIVITY)...$(NC)"
+	@adb -s $(AUTO_IP) shell am start -n $(AUTO_ACTIVITY)
+	@echo -e "$(GREEN)========================================================$(NC)"
+	@echo -e "$(GREEN)✓ Heavy auto release build + AOT compilation complete on $(AUTO_IP)$(NC)"
+	@echo -e "$(GREEN)========================================================$(NC)"
+
+auto-prod: auto-release ## Alias for auto-release
+
+auto-logs: ## Follow Android Automotive logcat for CineClaw
+	@echo -e "$(CYAN)Streaming live logs for $(AUTO_PKG) from $(AUTO_IP)...$(NC)"
+	adb -s $(AUTO_IP) logcat -v time | grep --line-buffered -E "CineClaw|ExoPlayer|StorageManager|DownloadManager|MediaCodec"
+
+auto-stop: ## Force stop CineClaw on Car
+	@echo -e "$(YELLOW)Stopping $(AUTO_PKG) on $(AUTO_IP)...$(NC)"
+	@adb -s $(AUTO_IP) shell am force-stop $(AUTO_PKG)
+	@echo -e "$(GREEN)✓ App stopped$(NC)"
+
 

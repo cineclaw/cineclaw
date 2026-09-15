@@ -62,7 +62,9 @@ xcrun devicectl device process launch --device "2C8A3405-B038-5A13-AD87-0B2B7C6A
 
 ## 4. Key Architectural Invariants
 
-1. **Direct Stream Priority**: Raw Matroska files (`.mkv`) are streamed directly to KSPlayer via HTTP Range requests. Never transcode to HLS unless playing in a web browser.
+1. **Direct Stream Priority & Legacy Hardware Fallback**:
+   - On hardware supporting HEVC (Apple TV 4K, A10X/A12/A15), raw Matroska files (`.mkv`) are streamed directly to KSPlayer via HTTP Range requests without transcoding.
+   - On legacy hardware without hardware HEVC decoding (Apple TV HD, `AppleTV5,3` with Apple A8) or when the user enables Transcode mode in Settings/Player, video is transcoded on-the-fly on the server to H.264 (`/api/stream/transcode/.../master.m3u8`), allowing smooth hardware decoding at 60fps with zero frame drops.
 2. **Watched State Synchronization**:
    - Continuous playback progress is pushed to `/api/playback/progress` every 5 seconds.
    - Reaching $\ge 90\%$ triggers automatic completion and advances Next Up to the succeeding episode.
@@ -71,3 +73,24 @@ xcrun devicectl device process launch --device "2C8A3405-B038-5A13-AD87-0B2B7C6A
    - Asynchronous, non-blocking fetching in `DetailsViewModel` via dedicated 60-second `aiSession` URLSession.
    - Resilient decoding with safe default values for all properties (`cached`, `scores`, `pros`, `cons`, `targetAudience`).
    - Server-side bbolt cache integrity (`cineclaw-ai`): only successful LLM syntheses are persisted; errors and cancellations are never cached.
+4. **Server Switching & Authentication State Engine**:
+   - `CineClawTVApp` observes `SessionManager.shared.isPaired`. When unauthenticated or after sign out, it transitions to `AuthView`.
+   - `AuthView` provides full tvOS living room onboarding: quick-select server presets (NAS `192.168.88.19:3000`, Local `127.0.0.1:3000`), manual host/port input with real-time ping detection (`HEAD /`), login & password authentication (`POST /api/auth/login`), and camera QR code / PIN pairing.
+   - `SettingsView` features an explicit «Сервер и авторизация» card with live ping status badge, «Сменить сервер» and «Выйти из аккаунта» action buttons with confirmation alerts that cleanly reset session credentials (`clearSession()`) and route directly to `AuthView`.
+5. **Server-Remembered Source Synchronization**:
+   - Before falling back to automatic release cascades, `HomeViewModel` and `DetailsViewModel` query `getPlayerInfo` (`GET /api/stream/player/info?tconst=...&season=...&episode=...`).
+   - If `mediaSourceId` exists (i.e. release was already chosen/mounted on Web or another client), Apple TV immediately reuses that exact torrent hash and file index, eliminating desynchronization across devices.
+6. **Persistent Transcoding & Quality Memory (`UserDefaults`)**:
+7. **Real-Time Swarm Throughput & Cellular Signal Indicator**:
+   - `NativeVLCPlayerViewController` renders a top-right OSD header containing `TvSignalStrengthView` and quality/mode badges (`[4K UHD]`, `[DIRECT STREAM]` / `[H.264]`).
+   - Features a cellular 4-bar stepped indicator (heights 4pt, 7pt, 10pt, 13pt) with color grading based on the ratio of BitTorrent download speed to video bitrate ($\text{SpeedRatio} = \frac{\text{DownloadSpeed}}{\text{VideoBitrate}}$):
+     - 4 bars ($\ge 1.5\times$ bitrate): Emerald green
+     - 3 bars ($1.0\times - 1.5\times$ bitrate): Lime green
+     - 2 bars ($0.5\times - 1.0\times$ bitrate): Amber
+     - 1 bar ($< 0.5\times$ bitrate): Red
+     - 0 bars: Muted white/gray
+   - Displays live download speed (e.g. `12.4 МБ/с`) and active seeders (`🌱 {seeds}`).
+   - Fades smoothly in/out with the bottom transport controls and auto-hiding OSD scrim.
+   - `PlayerViewModel` queries `GET /api/stream/stats` every 2 seconds via `CineClawClient.getStreamStats` during active playback.
+
+

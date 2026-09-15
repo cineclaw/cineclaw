@@ -56,36 +56,32 @@ tracker-proxy/
 - **Search Query & Sorting**: Uses `/search/0/0/0/2/<query>` to strictly sort search results by seed count descending (`sort=2`), ensuring the healthiest swarms are prioritized over low-seeded recent repacks (`sort=0`).
 - **Non-Video Clean Filtering**: Strips out non-video noise via regex pattern: `(?i)(\b(flac|lossless|alac|ape|soundtrack|ost|audiobook|аудиокнига|repack by|gog|pc game|crack|patch|pdf|fb2|epub|djvu)\b|\[(flac|mp3|lossless|pc|iso|android|ios)\])`.
 
-### RuTracker (`pkg/trackers/rutracker`)
+### RuTracker (`pkg/tracker/rutracker`)
 - **Protection**: Protected by Cloudflare Turnstile.
 - **Authentication**: Uses FlareSolverr (`http://flaresolverr:8191/v1`) with `request.post` to solve Turnstile and authenticate with RuTracker login/password.
 - **Session**: Caches and reuses the `bb_session` cookie across requests until expired.
 - **InfoHash Resolution**: Search results contain Topic IDs but no InfoHash. The scraper fetches the topic page to extract the InfoHash, caching the result in bbolt's `topic_hashes` bucket.
-- **Strict Video Forum Whitelist**: Filters searches by video-only subforums based on media type:
-  - **Movies**: 1457 (UHD HDR), 1940 (UHD SDR), 271 (UHD Remux), 313 (HD), 312, 2339, 252, 1950, 2200, 941, 1666, 124, 352, 4, 1105, 1936, 314, 46.
-  - **TV Series**: 119 (UHD), 1171 (UHD), 2366 (HD), 1803, 842, 812 (UHD), 81 (HD), 920, 921, 1106, 315.
-  - Eliminates all music, audiobooks, software, and PC games.
+- **Sorting & Multi-Page Pagination**: Searches using `tracker.php?nm=<query>&o=10&s=2` (seeders DESC) iterating up to 2-3 pages (`start=0`, `start=50`, `start=100`), ensuring all relevant season releases across all video subforums (e.g. 1288, 2366, 189, etc.) are discovered before deduplication and season filtering.
+- **Non-Video Clean Filtering**: Drops non-video media (audiobooks, music, PC games, software) in-memory via `hotlist.IsNonVideo`.
 
-### NNM-Club (`pkg/trackers/nnmclub`)
+### NNM-Club (`pkg/tracker/nnmclub`)
 - **Encoding**: **Windows-1251 (CP1251)**. All outgoing queries must be encoded to CP1251 and HTML responses decoded via `golang.org/x/text/encoding/charmap.Windows1251`.
+- **Sorting & High-Seed Swarms**: Posts to `tracker.php` with `o=10&s=2` (seeders DESC) covering all categories, filtered and scored in-memory.
 - **Strict Rate Limiting**: Sending $>2$ parallel requests triggers Cloudflare `503`.
   - Enforced by `nnmSemaphore = make(chan struct{}, 2)`.
   - Inter-request pacing: Minimum $75\text{ms} - 100\text{ms}$ delay between topic page fetches.
-- **Strict Video Forum Whitelist**: Replaces broad `f[]=-1` with dedicated video subforums based on media type:
-  - **Movies**: 954, 219, 1296 (UHD), 227 (HD), 882, 225, 221, 1177, 912, 909, 884, 1150, 1345, 1346, 891, 889, 682, 694, 1299, 1313, 1312, 1330, 1332, 1337, 1339, 620, 624, 628.
-  - **TV Series**: 768, 769, 1219, 1221, 1220, 1344, 1265, 784, 770, 780, 781, 1300, 1322, 658, 232, 620, 624, 628.
-  - Guarantees search results contain zero audiobooks, software, or soundtracks.
 
 ### 3.4 IMDb ID Title Auto-Resolution, Disambiguation & Candidate Scoring
 - **No IMDb Support on Trackers**: RuTracker, RuTor, and NNM-Club do not index or search by IMDb ID (`tt...`). They only search by text in topic titles.
 - **Empty Query Prevention**: `Aggregator.Search` strictly checks `if strings.TrimSpace(query.Query) == ""` and returns `nil` immediately. Querying trackers with empty strings is forbidden to avoid dumping the tracker's front page / newest releases into search results.
 - **IMDb Indexer Title Auto-Resolution & Year Disambiguation**: When `imdb_id` is passed but `q` is omitted, `tracker-proxy` (`executeSearch` and `autoResolveTorrent`) queries `imdb-indexer` (`/api/movie/{tconst}/metadata`) to resolve `meta.Title`, `meta.OriginalTitle`, and `meta.Year`. For movies, it appends the release year (e.g. `Приглашение 2026`) to eliminate noise from older releases or prefix collisions (e.g. "Приглашение к убийству" vs "Приглашение (2026)"), falling back to search without year if zero results are found.
 - **`ScoreCandidate` Multidimensional Relevance Ranking**: When selecting candidates in `autoResolveTorrent` or ranking search results, `stream.ScoreCandidate` scores releases considering:
-  - Exact year match (+500), boundary year $\pm 1$ (+150), major year mismatch $\Delta > 1$ (-2000 penalty).
-  - Original title match (+600) and mismatch (-1000 penalty).
-  - Russian title precision (+400) and extra word penalties (-400).
-  - Resolution preferences (1080p +30, 4K +20, 720p +10) and single-season match (+100).
-  - Seed count contribution capped at 1000 to prevent unrelated, high-seed releases from overwhelming genuine matches.
+  - Exact year match (+600 for movies), TV series air timeline spanning from show premiere to present (+600).
+  - Original title match (+600) and conflicting title penalty (-3000).
+  - Russian title precision match (+400).
+  - Exact single-season target match (+400), complete series pack (+150).
+  - Quality preference: 1080p Full HD (+300), 4K UHD (+250), 720p HD (+150).
+  - Seed count health scaling with swarm size.
 - **Cache Poisoning Prevention**: `Store.Set` in `pkg/cache/cache.go` refuses to cache entries if `query` is empty. `Store.Get` automatically invalidates and ignores any legacy cache entries where `entry.Query == ""`.
 
 ---
@@ -271,6 +267,8 @@ To ensure maximum speed, clean metadata indexing, and avoid Jellyfin scanning st
   Serves generated MPEG-TS segment file and updates the session's last activity timestamp.
 - `POST /api/stream/transcode/stop`  
   Immediately terminates active FFmpeg transcode processes for a specific torrent hash (or all sessions if hash is empty) and frees temporary directories (`os.RemoveAll`). Also invoked automatically when player closes or switches items.
+- `GET /api/stream/stats?hash={hash}&tconst={tconst}&season=N&episode=M&duration={durSec}` (alias: `/stream/stats`)  
+  Returns live BitTorrent swarm throughput and cellular signal metrics for video playback. Calculates video bitrate ($\text{VideoBitrate} = \frac{\text{fileLength} \times 8}{\text{duration}}$), speed ratio ($\frac{\text{DownloadSpeed}}{\text{VideoBitrate}}$), and 4-tier cellular signal level (0..4) with connected seeds and active peers.
 
 ---
 

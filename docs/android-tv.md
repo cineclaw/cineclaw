@@ -249,6 +249,26 @@ The **CineClaw Android TV** application (`com.cineclaw.tv`) is a modern, native 
 - **Robust URL Normalization (`SessionManager.kt`)**:
   - Automatically enforces `http://` scheme, trims whitespace and trailing slashes, and maintains separate storage for auth token and server host.
 
+---
+
+## 13. Real-Time Swarm Throughput & Cellular Signal Indicator (v1.8)
+
+- **Header OSD Placement**:
+  - Integrated into the top-right header row of `PlayerScreen.kt` preceding `[4K UHD]` and `[DIRECT STREAM]` badges.
+- **Cellular 4-Bar Stepped Badge (`TvSignalStrengthBadge`)**:
+  - 4 stepped vertical rounded bars (heights 4dp, 7dp, 10dp, 13dp) reflecting the ratio of BitTorrent download speed to required video bitrate ($\text{SpeedRatio} = \frac{\text{DownloadSpeed}}{\text{VideoBitrate}}$):
+    - 4 bars ($\ge 1.5\times$ bitrate): Emerald green (`#10B981`)
+    - 3 bars ($1.0\times - 1.5\times$ bitrate): Lime green (`#34D399`)
+    - 2 bars ($0.5\times - 1.0\times$ bitrate): Amber (`#F59E0B`)
+    - 1 bar ($< 0.5\times$ bitrate): Red (`#EF4444`)
+    - 0 bars (0 B/s / buffering): Muted gray (`#6B7280`)
+- **Live Swarm Metrics**:
+  - Monospaced download speed label (e.g. `12.4 МБ/с`, `850 КБ/с`).
+  - Active seeders pill badge (`🌱 {seeds}`) displayed whenever $\text{seeds} > 0$.
+- **Background Smart Polling (`CinemaPlayer.kt`)**:
+  - `startStatsPolling()` coroutine runs every 3 seconds while `isPlaying || isBuffering`, querying `GET /api/stream/stats` via `CineClawApi.getStreamStats` and safely updating `PlayerUiState.streamStats`.
+
+
 
 
 

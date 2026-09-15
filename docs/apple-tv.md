@@ -81,7 +81,16 @@ xcrun devicectl device process launch --device "2C8A3405-B038-5A13-AD87-0B2B7C6A
    - Before falling back to automatic release cascades, `HomeViewModel` and `DetailsViewModel` query `getPlayerInfo` (`GET /api/stream/player/info?tconst=...&season=...&episode=...`).
    - If `mediaSourceId` exists (i.e. release was already chosen/mounted on Web or another client), Apple TV immediately reuses that exact torrent hash and file index, eliminating desynchronization across devices.
 6. **Persistent Transcoding & Quality Memory (`UserDefaults`)**:
-   - User transcoding preferences (`PlaybackMode`: `auto`, `transcodeH264`, `direct`; `transcodeQuality`: `1080p`, `720p`, `480p`) are persisted across app sessions in `UserDefaults`.
-   - In-player transport menu allows dynamic on-the-fly switching between Direct MKV and H.264 transcode with exact timestamp preservation.
-   - Audio track switching during transcoding re-requests the HLS master playlist with `&audio=X` at the current timecode, seamlessly synchronizing voiceovers (e.g. Goblin, NTV, original) without player crash.
+7. **Real-Time Swarm Throughput & Cellular Signal Indicator**:
+   - `NativeVLCPlayerViewController` renders a top-right OSD header containing `TvSignalStrengthView` and quality/mode badges (`[4K UHD]`, `[DIRECT STREAM]` / `[H.264]`).
+   - Features a cellular 4-bar stepped indicator (heights 4pt, 7pt, 10pt, 13pt) with color grading based on the ratio of BitTorrent download speed to video bitrate ($\text{SpeedRatio} = \frac{\text{DownloadSpeed}}{\text{VideoBitrate}}$):
+     - 4 bars ($\ge 1.5\times$ bitrate): Emerald green
+     - 3 bars ($1.0\times - 1.5\times$ bitrate): Lime green
+     - 2 bars ($0.5\times - 1.0\times$ bitrate): Amber
+     - 1 bar ($< 0.5\times$ bitrate): Red
+     - 0 bars: Muted white/gray
+   - Displays live download speed (e.g. `12.4 МБ/с`) and active seeders (`🌱 {seeds}`).
+   - Fades smoothly in/out with the bottom transport controls and auto-hiding OSD scrim.
+   - `PlayerViewModel` queries `GET /api/stream/stats` every 2 seconds via `CineClawClient.getStreamStats` during active playback.
+
 

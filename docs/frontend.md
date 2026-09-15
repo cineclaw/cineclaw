@@ -292,6 +292,17 @@ CineClaw v2 is architected around a **mobile-first cinema experience**:
     - If buffering exceeds 30 seconds, an obsidian cinema banner appears: *"Долгая буферизация (>30 сек). Похоже, текущая раздача медленно отдает данные. Хотите переключиться на раздачу с максимальным количеством сидов?"*
     - User can snooze («Подождать»), open the Quality / Swarm selector («Сменить качество»), or open the **Alternate Release Picker** (`showAlternateModal`), strictly sorted by seeds descending (`seeds desc`) with live seed count (`🌱 N сидов`), leechers, file size, tracker, and audio tag.
     - Selecting a release mounts it via `mode: 'add_version'`, updates player info, and resumes playback seamlessly from the exact timestamp.
+  - **Real-Time Swarm Throughput & Cellular Signal Indicator**:
+    - **Header Placement**: Positioned in the top right header bar next to quality badges and close button.
+    - **Cellular 4-Bar Stepped Indicator**: 4 vertical bars (heights 4px, 7px, 10px, 13px) reflecting the speed-to-bitrate ratio ($\text{SpeedRatio} = \frac{\text{DownloadSpeed}}{\text{VideoBitrate}}$):
+      - 4 bars ($\ge 1.5\times$ bitrate): Emerald green (`#10B981`)
+      - 3 bars ($1.0\times - 1.5\times$ bitrate): Lime green (`#34D399`)
+      - 2 bars ($0.5\times - 1.0\times$ bitrate): Amber (`#F59E0B`)
+      - 1 bar ($< 0.5\times$ bitrate): Red (`#EF4444`)
+      - 0 bars (0 B/s / buffering): Muted gray (`#6B7280`)
+    - **Live Metrics**: Displays formatted download speed (e.g. `12.4 МБ/с`) and active seeders count badge (`🌱 {seeds}`).
+    - **Interactive Hover/Click Tooltip**: Full swarm breakdown popover detailing Signal Status, Live Download Speed, Video Bitrate, Speed-to-Bitrate Ratio multiplier, and connected Seeds/Peers.
+    - **Non-Blocking Smart Polling**: Polling occurs every 3 seconds via RTK Query `useGetStreamStatsQuery` strictly while video is playing or buffering (`isPlaying || isBuffering`).
 
 ---
 

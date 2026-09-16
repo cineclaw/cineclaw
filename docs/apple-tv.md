@@ -92,5 +92,9 @@ xcrun devicectl device process launch --device "2C8A3405-B038-5A13-AD87-0B2B7C6A
    - Displays live download speed (e.g. `12.4 МБ/с`) and active seeders (`🌱 {seeds}`).
    - Fades smoothly in/out with the bottom transport controls and auto-hiding OSD scrim.
    - `PlayerViewModel` queries `GET /api/stream/stats` every 2 seconds via `CineClawClient.getStreamStats` during active playback.
-
-
+8. **Skip Intro & Next Episode Siri Remote Autofocus**:
+   - Floating capsule button (`skipIntroButton`) rendered via UIKit inside `NativeVLCPlayerViewController`, positioned above the bottom deck or bottom right safe area.
+   - When playback enters an active segment (`intro` or `credits` from `skip_segments`), the button automatically animates into view and requests tvOS focus via `preferredFocusEnvironments` and `focusButton()`.
+   - **Siri Remote Focus Integration**: Siri Remote Clickpad center click triggers `.primaryActionTriggered` or is intercepted via `handleSelect`, instantly seeking to the segment's end or advancing to the next episode.
+   - **Non-Intrusive Dismissal**: Pressing the Menu button on the Siri Remote while the skip button is visible gracefully dismisses the button (`hideSkipIntroButton()`) without quitting playback.
+   - Displays a brief HUD toast confirmation upon skipping (*«Заставка пропущена»* / *«Следующая серия»*).

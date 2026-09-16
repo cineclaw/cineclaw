@@ -268,6 +268,21 @@ The **CineClaw Android TV** application (`com.cineclaw.tv`) is a modern, native 
 - **Background Smart Polling (`CinemaPlayer.kt`)**:
   - `startStatsPolling()` coroutine runs every 3 seconds while `isPlaying || isBuffering`, querying `GET /api/stream/stats` via `CineClawApi.getStreamStats` and safely updating `PlayerUiState.streamStats`.
 
+---
+
+## 14. Skip Intro & Next Episode D-Pad Autofocus (v1.9)
+
+- **Remote D-Pad Autofocus (`PlayerScreen.kt`)**:
+  - Automatically activates when `currentTime` enters a segment in `skipSegments` (`intro` or `credits`).
+  - `LaunchedEffect(activeSkipSegment)` executes `skipButtonFocusRequester.requestFocus()`, immediately focusing the remote D-pad onto the action button without requiring user navigation.
+- **Visual Design**:
+  - tv-material3 `Button` with obsidian glass fill (`0xEE0F172A`) and glowing emerald border (`#10B981`, 2dp) when focused.
+  - Displays `[ ▶ Пропустить заставку ]` for intro or `[ Следующая серия ▶ ]` for credits.
+- **Living Room Remote Interaction**:
+  - Pressing D-Pad Center or Enter triggers `onSkipSegment(segment.endTime)` or triggers next episode navigation.
+  - Includes a dedicated `KeyEvent` interceptor (`onPreviewKeyEvent`) so Center/Enter activates the skip action even if focus was in transit.
+  - Fades out cleanly when the intro segment ends or after user executes skip.
+
 
 
 

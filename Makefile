@@ -4,7 +4,7 @@
 
 SHELL := /bin/bash
 REGISTRY ?= ghcr.io/cineclaw
-VERSION ?= 1.2.0
+VERSION ?= 1.3.0
 PLATFORMS ?= linux/amd64,linux/arm64
 BUILDER ?= multiarch
 

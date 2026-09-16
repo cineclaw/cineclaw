@@ -259,6 +259,7 @@ To ensure maximum speed, clean metadata indexing, and avoid Jellyfin scanning st
   1. `stream_url`: `/gst/{hash}/master.m3u8?id={idx}&audio={audio}` for embedded web player with zero-transcode GStreamer remuxing and AAC conversion.
   2. `direct_stream_url`: `/torr/stream/<filename>?link={hash}&index={idx}&play` for external native players (VLC, IINA, Infuse) and Android TV Media3 ExoPlayer capable of multi-channel pass-through.
   3. `transcode_profiles`: List of available real-time transcoding profiles (`direct`, `1080p`, `720p`, `480p`, `360p`) for bandwidth-constrained playback.
+  4. `skip_segments`: Array of classified intro and outro segments (`[{ "type": "intro"|"credits", "start_time": 0.0, "end_time": 99.72 }]`) extracted via `ffprobe` chapter detection or SQLite cache (`media_skip_segments`), supporting explicit tags and generic Blu-ray chapter markers.
 - `GET /api/stream/transcode/profiles`  
   Returns array of available transcode profiles with label, bitrates, resolution caps, and direct-stream flags.
 - `GET /api/stream/transcode/{hash}/master.m3u8?profile={id}&file_idx={idx}&audio={audio}&start={startSec}&s={sessionId}`  

@@ -90,8 +90,15 @@ Supports instant local metadata generation and asset pre-downloading for Jellyfi
        - **General Crew**: Screenplay, Executive Producer, Producer, Composer, Cinematographer from `credits.crew`.
        - **Deduplication**: Automatically suppresses creators, directors, and writers from repeating in `Executive Producer` to spotlight other notable producers and stars (like Jon Hamm).
      - Filtered YouTube trailers & teasers prioritized by Russian localization and official status.
+     - **Kinopoisk Unofficial Trailers Integration**: Official Russian dubbed trailers retrieved from Kinopoisk (`/api/v2.2/films/{id}/videos`) and prepended to the `videos` array before English TMDB trailers.
+     - **Theatrical & Digital Release Dates**: Localized Russian premiere (`premiered_ru`), world premiere (`premiered`), and digital release (`digital_release`) dates extracted from Kinopoisk distributions (`PREMIERE` in Russia, `WORLD_PREMIER`, `DIGITAL`) and TMDB `release_dates`.
+     - **In-Theaters Status (`in_theaters: bool`)**: Dynamically calculated based on `isTicketsAvailable == true` on Kinopoisk, or within the 55-day theatrical window prior to digital release.
      - Image paths (`poster_path`, `backdrop_path`, `logo_path`).
-   - Used by frontend for synopsis, cast avatars, crew badges, and embedded YouTube trailer playback.
+   - Used by frontend and TV clients for synopsis, cast avatars, crew badges, premiere dates, and embedded trailer playback.
+4.1 **Direct HLS Master Stream Proxy for Trailers**:
+   - `GET /api/trailer/:trailer_id/stream` (alias: `/trailer/:trailer_id/stream`)
+   - Extracts the direct unencrypted 1080p master HLS stream (`https://strm.yandex.ru/.../master_sdr_hd_avc_aac.m3u8`) and high-resolution thumbnail (`avatars.mds.yandex.net/...`) from Kinopoisk player widgets with an in-memory LRU cache (3-hour TTL).
+   - Enables Web (`Hls.js`), Android TV (`Media3 ExoPlayer`), and Apple TV (`AVKit / AVPlayerViewController`) to stream Russian dubbed trailers natively with zero third-party ads or iframe restrictions.
 5. **Fetch Person Metadata & Filmography**:
    - `GET /api/person/:person_id`
    - Fetches TMDB person profile with `append_to_response=combined_credits,external_ids&language=ru-RU` (with English fallback for biography if Russian is absent).

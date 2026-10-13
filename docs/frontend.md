@@ -303,6 +303,10 @@ CineClaw v2 is architected around a **mobile-first cinema experience**:
     - **Live Metrics**: Displays formatted download speed (e.g. `12.4 МБ/с`) and active seeders count badge (`🌱 {seeds}`).
     - **Interactive Hover/Click Tooltip**: Full swarm breakdown popover detailing Signal Status, Live Download Speed, Video Bitrate, Speed-to-Bitrate Ratio multiplier, and connected Seeds/Peers.
     - **Non-Blocking Smart Polling**: Polling occurs every 3 seconds via RTK Query `useGetStreamStatsQuery` strictly while video is playing or buffering (`isPlaying || isBuffering`).
+  - **Skip Intro & Next Episode Button**:
+    - **Reactive State**: Monitors `currentTime` against `playerInfo.skip_segments` (`activeSkipSegment`).
+    - **Floating Action Pill**: Floats at bottom right above the transport deck: `[ ▶ Пропустить заставку (S) ]` or `[ Следующая серия ▶ (S) ]`.
+    - **Keyboard Shortcuts**: Pressing `S`, `s`, `Ы`, or `ы` immediately seeks to segment end or triggers next episode without needing mouse interaction.
 
 ---
 

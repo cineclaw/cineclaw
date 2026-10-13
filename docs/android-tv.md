@@ -283,6 +283,59 @@ The **CineClaw Android TV** application (`com.cineclaw.tv`) is a modern, native 
   - Includes a dedicated `KeyEvent` interceptor (`onPreviewKeyEvent`) so Center/Enter activates the skip action even if focus was in transit.
   - Fades out cleanly when the intro segment ends or after user executes skip.
 
+---
+
+## 15. LAN Server Auto-Discovery, Resilient Session Management & QR Code Pairing (v2.0)
+
+- **LAN Server Auto-Discovery Engine (`ServerDiscovery.kt`)**:
+  - Automatically identifies local IPv4 subnet prefixes (e.g. `192.168.88.`) from active network interfaces.
+  - Executes rapid parallel subnet sweep across `/24` on port 3000 (`GET /api/health`) using coroutine semaphores (concurrency 35, 600ms connect timeout).
+  - Sends UDP discovery datagrams (`{"cmd":"discover"}`) to `255.255.255.255:9118`, listening for `tracker-proxy` beacons.
+  - Discovered servers are displayed in a horizontal selection bar on `AuthScreen.kt` with live status dots, server names, and IP addresses. Automatically selects active servers if the default address is unreachable.
+- **Resilient Living Room Session Architecture (`ApiClient.kt`, `SessionManager.kt`)**:
+  - **Eliminated False-Positive Logouts**: Isolated `imageOkHttpClient` (Coil) and `streamingOkHttpClient` (ExoPlayer) from session-clearing interceptors. External TMDB CDN 401s or BitTorrent stream chunk dropouts no longer delete saved credentials.
+  - **Pre-Flight Token Verification**: In `okHttpClient`, interceptors only react to 401 responses directed at CineClaw hosts with an active token, and double-verify with `GET /api/auth/verify` before clearing credentials.
+  - **Synchronous Token Pre-population**: `SessionManager` synchronously pre-populates `currentToken` and `currentServerUrl` from DataStore on startup, preventing Compose `collectAsState` initial `null` race conditions from prematurely redirecting to the login screen.
+  - **Default Remember-Me Serialization**: Added `encodeDefaults = true` to Kotlinx Serialization `Json`, ensuring `remember_me: true` is sent to the backend to issue 180-day living room tokens instead of 24-hour sessions.
+- **Living Room QR Code & PIN Auto-Pairing (`AuthScreen.kt`)**:
+  - Made QR Code pairing the primary, zero-typing living room onboarding flow.
+  - Automatically registers pairing sessions on the server via `POST /api/auth/pair/init` upon server selection.
+  - Generates QR code pointing to `${serverUrl}/pair?code=${pairingCode}` alongside a prominent amber monospace 6-digit PIN.
+  - Active coroutine polls `/api/auth/pair/status` every 2 seconds; when approved from a smartphone or browser, credentials are saved to DataStore and the app transitions immediately to the home screen.
+
+---
+
+## 16. Russian Dubbed Trailers (Kinopoisk Unofficial), Premiere Dates & In-Theaters Status (v2.1)
+
+- **Top Hero «Трейлер» Action Button (`DetailsScreen.kt`)**:
+  - Positioned directly adjacent to the primary «Смотреть» button in the action row (`[ Смотреть ]  [ 🎬 Трейлер ]  [ Качество ] ...`).
+  - Seamlessly opens the highest-priority official Russian dubbed trailer with 1 D-Pad Right click from the play button.
+- **Kinopoisk Primary Priority & Trailer Ordering**:
+  - Trailed list and top action button prioritize Kinopoisk Russian dubbed trailers (`it.isKinopoisk`) above all other sources, followed by official trailers (`official = true`), sorting teasers and fan clips after main trailers.
+  - Kinopoisk trailer cards resolve missing thumbnails by gracefully falling back to the film's widescreen backdrop (`effectiveBackdrop`), eliminating broken 404 images from YouTube.
+- **«В кинотеатрах» Badge & Clean Premiere Dates (`DetailsScreen.kt`)**:
+  - Displays top badge `✨ В кинотеатрах` (amber/orange glow) when the movie is actively running in theaters.
+  - Formats Russian release dates cleanly (`В РФ: 29 фев 2024` or `Премьера: 1 мар 2024`) with `formatTvPremiereDate`, alongside the `КП` rating badge.
+- **Russian Dubbed Trailers & ExoPlayer Native Playback (`TrailerPlayerDialog.kt`)**:
+  - Official Russian dubbed trailers from Kinopoisk Unofficial are displayed with `ДУБЛЯЖ • КП` tags in the trailers carousel.
+  - For Kinopoisk trailers, resolves master HLS streams via `CineClawApi.getTrailerStream` and plays directly via **AndroidX Media3 ExoPlayer** with hardware video decoding, D-Pad seeking (±10s), pause/play, and TV HUD overlay.
+  - YouTube trailers retain the built-in IFrame player as fallback.
+
+---
+
+## 17. Auto Frame Rate (AFR) & Hardware Display Mode Switching (v2.2)
+
+- **Two-Tier Auto Frame Rate Engine (`AutoFrameRateHelper.kt`)**:
+  - Automatically matches television panel refresh rate (23.976 Hz, 24.000 Hz, 50.000 Hz, 59.940 Hz, 60.000 Hz) to the exact frame rate of the active video stream.
+  - **Tier 1 (Surface Frame Rate Strategy)**: Media3 ExoPlayer configured with `C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS` for modern HDMI 2.1 QMS (Quick Media Switching) TVs and Android 11+ devices.
+  - **Tier 2 (Display.Mode Hardware Switching)**: For HDMI 2.0 and standard Android TV boxes, `AutoFrameRateHelper.applyAutoFrameRate` selects matching `Display.Mode` via `window.attributes.preferredDisplayModeId = matchingMode.modeId`.
+  - **Physical Resolution Preservation**: Candidate display modes strictly filter by current physical resolution (`physicalWidth == currentMode.physicalWidth && physicalHeight == currentMode.physicalHeight`), ensuring 4K panels stay at 4K without premature downscaling.
+  - **Clean 60Hz UI Restoration**: Upon exiting `PlayerScreen`, `AutoFrameRateHelper.restoreDefaultDisplayMode(activity)` immediately resets `preferredDisplayModeId = 0` to return TV to butter-smooth 60Hz navigation.
+- **Settings Persistence & User Controls**:
+  - Stored in DataStore (`auto_frame_rate`, defaulting to `true`).
+  - Interactive toggle in `SettingsScreen.kt` under *«Видео & Частота экрана»* (*«Автоподстройка частоты кадров (AFR)»*).
+
+
 
 
 

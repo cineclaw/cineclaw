@@ -24,6 +24,7 @@ services:
       - ${DATA_DIR:-./data}/imdb-indexer:/data
     environment:
       - TMDB_API_KEY=${TMDB_API_KEY:-db85bce5bf5bf9bac3c140447bf5ac5d}
+      - KINOPOISK_API_KEY=${KINOPOISK_API_KEY:-}
       - DATA_DIR=/data
     networks:
       - cineclaw-net

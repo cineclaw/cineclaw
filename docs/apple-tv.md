@@ -8,7 +8,9 @@ The **CineClaw Apple TV** application (`com.andvikt.cineclaw`) is a native tvOS 
 
 - **Language & Runtime**: Swift 6, tvOS 18.0+ deployment target.
 - **UI Framework**: SwiftUI with custom tvOS focus engines (`@FocusState`, `TVCardButtonStyle`, `.focusSection()`).
-- **Media Engine**: KSPlayer (FFmpeg 7.x + Apple Metal zero-copy hardware rendering) for raw MKV, DTS-HD MA, Dolby TrueHD, E-AC3 Atmos, and embedded PGS/ASS/SRT subtitles.
+- **Modular Media Engines**:
+  - **AetherEngine (Default)**: Advanced VideoToolbox + FFmpeg 7 demuxer (`AetherEngine` 7.22.0) with native frame rate matching (`AVDisplayCriteria`), Dolby Vision CMv4.0 RPU converter, and subtitle renderer.
+  - **AVPlayer**: Native system player fallback for pure HLS-fMP4 and MP4 streams.
 - **Image Pipeline**: NukeUI (`LazyImage`) with edge TMDB CDN resolution and in-memory caching.
 - **Networking**: URLSession with async/await, streaming TorrServer MatriX direct HTTP Range requests (`/torr/stream/<file>?link=<hash>&index=<idx>&play`).
 
@@ -101,3 +103,19 @@ xcrun devicectl device process launch --device "2C8A3405-B038-5A13-AD87-0B2B7C6A
 9. **KSPlayer Buffer Management & Cinema-Grade Transcoding**:
    - **Zero-Pause Direct Streaming**: `preferredForwardBufferDuration` is configured to `4.0` seconds (replacing flawed `0.0`), preventing playback start until a robust 4-second forward buffer is assembled. `options.formatContextOptions["buffer_size"] = 1048576` (1 MB network read-ahead) and `maxBufferDuration = 60.0` cushion TorrServer HTTP Range transfers against BitTorrent swarm chunk latency.
    - **Cinema-Grade Gradient Transcoding**: On-the-fly server transcoding (`tracker-proxy`) utilizes `-tune film` (activating Adaptive Quantization and psy-rd), B-frames (`-bf 3 -b_strategy 1`), High profile (`-profile:v high -level 4.1`), `veryfast` preset, and spline dithering (`flags=spline+accurate_rnd+full_chroma_int`). Eliminates macroblocking and dark gradient posterization while preserving subtle shadow nuances.
+10. **LAN Server Auto-Discovery & QR Code Pairing (`AuthView.swift`, `CineClawClient.swift`)**:
+   - **Local Subnet Sweep (`discoverLocalServers`)**: Inspects active network interfaces via POSIX `getifaddrs`, extracts local IPv4 subnet prefixes (e.g. `192.168.88.`), and launches concurrent tasks (`withTaskGroup`) probing `GET /api/health` across all 254 hosts with 800ms timeouts.
+   - **Discovered Server Selection**: Renders a dedicated horizontal bar of focusable tvOS buttons (`TVCardButtonStyle`) displaying server status dots, names, and IP addresses. Selecting any server immediately sets `APIConfig.shared.baseURL`, runs a reachability check, and initializes pairing. Automatically selects the first active server if the default address is offline.
+   - **QR Code & 6-Digit PIN Pairing Engine**: Automatically initializes living room pairing via `POST /api/auth/pair/init` upon server selection. Renders a high-resolution QR code (`/pair?code=...`) alongside large emerald monospace PIN digits (`32pt`, `tracking(4)`). Background task polls `GET /api/auth/pair/status` every 2 seconds. When approved via phone or browser, credentials are saved to `SessionManager`, and `CineClawTVApp` animates smoothly into `MainTabView`.
+11. **Russian Dubbed Trailers & Native tvOS HLS Player (`DetailsView.swift`, `TrailerPlayerView`)**:
+   - **«В КИНОТЕАТРАХ» Status & Premiere Dates**: Hero metadata header renders glowing amber `TagBadge(text: "✨ В КИНОТЕАТРАХ")` when active in theaters, `КП {rating}` badge, and clean localized premiere dates («В РФ: 29 фев 2024» / «Премьера: 1 мар 2024»).
+   - **«Трейлеры и видео» Horizontal Row**: 16:9 cards (`TrailerCardView`) with Siri Remote focus scaling, gradient vignettes, center play circles, `ДУБЛЯЖ • КП` badges, and titles.
+   - **Native `AVPlayerViewController` Full-Screen Player**: Resolves master HLS stream via `CineClawClient.getTrailerStream`, presenting full-screen `AVPlayerViewController` with Siri Remote scrub controls, hardware Metal acceleration, and zero third-party ads.
+12. **Periodic Stutter Elimination & MainActor Decoupling (`CineClawClient.swift`, `PlayerViewModel.swift`)**:
+   - Identified and fixed root cause of recurring 5-second micro-freezes during direct streaming: `reportProgress` in `CineClawClient` previously posted `.playbackProgressDidChange` notification to `NotificationCenter.default` on `MainActor` every heartbeat. Background `HomeView` intercepted this and called `HomeViewModel.loadHome(refresh: true)`, reloading the entire catalog and causing main-thread UI hitches.
+   - Progress reporting is now executed strictly in detached background tasks (`Task.detached(priority: .utility)`). `.playbackProgressDidChange` is posted only once when the player stops/closes.
+13. **tvOS Match Frame Rate / Match Content (`AVDisplayCriteria`, `KSPlayerEngine.swift`)**:
+   - Implemented hardware TV refresh rate synchronization using `AVDisplayManager.preferredDisplayCriteria = AVDisplayCriteria(refreshRate: Float, videoDynamicRange: Int32)`.
+   - In `CineClawPlayerOptions.updateVideo`, when FFmpeg probes video stream parameters (`options.videoFrameRate`), tvOS switches the television panel to native 23.976Hz, 24Hz, 50Hz, or 60Hz.
+   - Enabled `KSOptions.preferredFrame = true` for high-precision frame presentation timing.
+   - Added clean reset (`preferredDisplayCriteria = nil`) upon player exit in `NativeVLCPlayerView.viewWillDisappear` to restore the 60Hz tvOS UI.

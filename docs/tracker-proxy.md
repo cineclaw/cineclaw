@@ -36,6 +36,11 @@ tracker-proxy/
 │   ├── stream/
 │   │   ├── service.go        # TorrStreamService orchestrator (Range requests & TorrServer stream)
 │   │   └── torrclient.go     # TorrServer MatriX JSON API & GStreamer client
+│   ├── swarm/
+│   │   ├── bep15.go          # BEP 15 UDP Tracker protocol client (batch scrape up to 74 hashes)
+│   │   ├── calculator.go     # Swarm health, verified seeds reconciliation & speed potential
+│   │   ├── hash.go           # 40-char hex & 32-char base32 info_hash decoders
+│   │   └── service.go        # Concurrent multi-tracker verification service & in-memory cache
 │   └── trackers/
 │       ├── nnmclub/          # NNM-Club scraper (Windows-1251, semaphore rate-limiting)
 │       ├── rutor/            # RuTor scraper (direct HTML parsing, inline magnet/hash)
@@ -116,6 +121,50 @@ magnet:?xt=urn:btih:<INFOHASH>&dn=<NAME>
   &tr=udp://tracker.openbittorrent.com:6969/announce
 ```
 This forces the user's BitTorrent client to connect to peers across all three swarms simultaneously.
+
+---
+
+## 5. Real-Time Swarm Verification & Speed Potential Engine (`pkg/swarm`)
+
+### Problem Statement
+HTML scrapers on public trackers (especially RuTor) parse seeder counts that are frequently stale, cached for hours/days, or completely fabricated. As a result:
+- Dead/ghost torrents claiming 50–200 seeds lead to stalled buffers (0 B/s) and player freezes.
+- Healthy swarms with hundreds of active DHT/PEX peers might show only 1 or 2 seeds on outdated HTML listings.
+
+### BEP 15 UDP Batch Scraper Architecture (`pkg/swarm/bep15.go`)
+`tracker-proxy` implements the official BitTorrent extension **BEP 15 (UDP Tracker Protocol for BitTorrent)** to query open tracker daemons over UDP in real time:
+- **Connectionless & Fast**: 1 connection packet (16 bytes) -> receive 64-bit `connection_id` -> 1 scrape packet with up to **74 InfoHashes packed into a single UDP datagram** (fitting standard 1500 MTU).
+- **Parallel Dispatch**: Search results are queried simultaneously across tier-1 open trackers:
+  - `udp://tracker.opentrackr.org:1337/announce` (tens of millions of swarms, sub-100ms replies)
+  - `udp://open.stealth.si:80/announce`
+  - `udp://tracker.torrent.eu.org:451/announce`
+  - `udp://opentor.net:6969/announce` (RuTor official daemon)
+- **Bounded Latency**: Scrape requests execute with a strict bounded timeout (default: 1200ms) with non-blocking goroutines, ensuring search responses never stall.
+- **In-Memory Cache**: Scraped swarm assessments are cached in memory for 15 minutes (`cacheTTL: 15m`), eliminating redundant network roundtrips for repeated searches.
+
+### Swarm Vitality & Speed Potential Metric (`pkg/swarm/calculator.go`)
+For each torrent, `CalculateHealthAndPotential` reconciles verified metrics with source trust factors:
+1. **Ghost Swarm Detection**:
+   - If responsive UDP trackers confirm `seeds: 0, completed: 0, leechers: 0` and the release is NOT on RuTracker, claimed seeds from RuTor are flagged as refuted.
+   - `EffectiveSeeds = 0`, `RealSeeds = 0`, `SeedsVerified = true`, `SwarmHealth = "dead"`, `SpeedPotential = 0`.
+2. **RuTracker Trust Anchor**:
+   - RuTracker's passkey tracker (`bt.t-ru.org`) is an authenticated private HTTP tracker not queryable via open UDP trackers.
+   - RuTracker claimed seeds are assigned a 1.0 trust factor. If verified UDP seeds are lower than RuTracker's internal count, `max(verifiedSeeds, rutrackerSeeds)` is taken.
+3. **Speed Potential (0–100 %)**:
+   - **Base Seeder Factor**: 1 seed (30), 2 seeds (45), 3–5 seeds (58–68), 6–10 seeds (80), 11–20 seeds (88), 21–40 seeds (94), 40+ seeds (up to 100).
+   - **Swarm Contention Penalty**: If $\text{Leechers} > \text{Seeds} \times 2$, deducts up to 20 points due to upload choke.
+   - **Swarm Maturity Bonus**: If $\text{Completed} \ge 1000$ downloads, adds +6 points (indicating deep DHT/PEX chunk distribution).
+   - **Bitrate Feasibility Constraint**: For 4K REMUX / UHD (>25 GB), if $\text{EffectiveSeeds} < 3$, `SpeedPotential` is capped at 35 (warning: high buffer underrun risk).
+4. **Swarm Health Rating**:
+   - `"dead"`: 0 effective seeds or score < 15.
+   - `"low"`: score 15–45.
+   - `"good"`: score 46–79.
+   - `"excellent"`: score 80–100.
+
+### Candidate Ranking & Sorting
+- In `Aggregator.Search`, dead swarms (`SwarmHealth == "dead"`) automatically sink to the bottom of the results list.
+- In `stream.ScoreCandidate`, dead swarms receive a `-5000` penalty, while verified active swarms receive `+150` plus `+ SpeedPotential * 2`.
+- In `frontend` and `android-tv`, releases display verified status (`✓`), speed percentage (`⚡ 94%`), and dead swarm warnings (`❌ 0 сидов (мёртвая)`).
 
 ---
 
@@ -463,9 +512,69 @@ Because Jellyfin library files are symbolic links pointing to `/media/virtual/`,
   - Previously, `GetPlayerInfo` blocked synchronously on full GStreamer/FFprobe probing (`probeStreamDirect`), causing 5–15 second UI freezes on cold torrents while demuxing audio/subtitles.
   - Replaced with `probeStreamFast` which enforces a strict 500ms probe window. If metadata is not returned within 500ms, it falls back to safe default stream parameters (`audio: [{"index": 0, "title": "Основная дорожка"}]`) and warms the full probe asynchronously in the background.
   - Added background probe warming directly inside `MountTorrent` so tracks are probed before the user even opens the player.
-- **TorrServer-Turbo Priority Inversion Fix**:
-  - Removed cache-boundary checks in `cache.go` (`isIdInFileBE`) that previously caused piece requests near file start or boundary limits to be completely ignored by the scheduler.
-  - Enabled unconditional `reader.SetResponsive()` and instant `cache.refreshPriorities()` on reader creation and seeking (`reader.Seek()`).
-  - Swarm priority updates execute concurrently within <1ms, enabling sub-second seeks (185–580ms) and warm series episode switches (<900ms).
+---
+
+## 17. LAN Auto-Discovery & Living Room QR/PIN Pairing Authentication
+
+- **UDP Beacon Discovery Responder (`pkg/discovery/discovery.go`)**:
+  - Binds UDP port `9118`.
+  - Listens for broadcast datagrams containing `{"cmd":"discover"}` or text `"cineclaw"`.
+  - Responds with JSON:
+    ```json
+    {
+      "status": "ok",
+      "service": "cineclaw",
+      "name": "CineClaw Cinema",
+      "version": "1.3.0",
+      "http_port": 3000
+    }
+    ```
+- **HTTP Health Probe (`pkg/api/handler.go`)**:
+  - `GET /api/health` — Public endpoint returning service metadata for fast LAN HTTP subnet sweep (`/24` on port 3000).
+- **Pairing Authentication Flow (`pkg/auth/pairing.go`)**:
+  - `POST /api/auth/pair/init`: Initiates a living room pairing session with `{ "code": "123456", "device_name": "Android TV" }`. Session has a 10-minute TTL.
+  - `GET /api/auth/pair/status?code=123456`: Polled by TV clients every 2 seconds. When approved, returns `{ "paired": true, "token": "...", "username": "admin" }`.
+  - `POST /api/auth/pair/approve`: Protected by authentication. Invoked by smartphone/browser visiting `/pair?code=123456`. Approves the pairing session and generates a 180-day living room device session token.
+- **Living Room Session Durability**:
+  - `DefaultTTL` extended to 180 days (6 months); `DeviceTTL` set to 365 days; `ShortTTL` extended to 30 days.
+  - Login endpoint defaults to `remember_me = true` to prevent unintended 24-hour logouts on living room appliances.
+
+---
+
+## 18. Ongoing TV Series Auto-Update & Two-Stage Web Push Subsystem
+
+- **Overview**:
+  - Automatically tracks weekly ongoing TV series (e.g. *Mob Land* / *«Гангстерленд»*, *The Penguin*, etc.) across Russian BitTorrent trackers.
+  - Features intelligent studio voiceover extraction (*озвучка*, e.g. Red Head Sound, LostFilm, Кубик в Кубе, HDRezka, ViruseProject, TVShows, NewStudio, etc.) and two-stage Web Push notifications without third-party dependencies (pure PWA).
+  - Pre-warms newly detected torrent releases in TorrServer for instant (<1s) playback.
+- **Tracked Series Queue Formation**:
+  - The monitoring queue is automatically assembled from three sources:
+    1. Explicit series subscriptions (`series_subscriptions` table).
+    2. Watchlist entries for TV shows (`media_watchlist` table with `media_type = 'tv'`).
+    3. Actively watched TV series from `watch_progress` (`media_type = 'tv'` and `last_watched_at > datetime('now', '-30 days')`).
+- **Two-Stage Notification Lifecycle**:
+  - **Stage 1 (Initial Release)**: Dispatched immediately when *any* Russian-dubbed release of the next episode appears on trackers.
+  - **Stage 2 (Preferred Studio)**: Dispatched when the user's preferred studio (e.g. *Red Head Sound*) releases their dub for the episode. If the initial release already contains the preferred studio, only one notification is sent.
+  - Deduplicated persistently via `series_detected_releases` (`UNIQUE(imdb_id, season, episode, stage)`).
+- **Studio Parsing & Unicode Matching (`pkg/tracker/studios.go`)**:
+  - Canonical studio registry with regex word-boundary patterns using Go Unicode classes `(?:^|[^\p{L}\p{N}])` to properly handle Cyrillic names.
+  - `ExtractStudios(title)` detects all dubbing studios mentioned in torrent release titles.
+  - `MatchesStudio(studios, preferred)` performs normalized canonical matching with fallback to substring containment.
+  - `ExtractEpisodeMax(title)` parses episode numbers from Russian ranges (`1-2 из 10`), tags (`02x01-04`), and single episode tags (`S02E03`).
+  - `ExtractSeasonInfo(title)` enforces that torrents for other seasons (e.g. Season 1 complete packs) are not confused with Season 2 releases.
+- **Web Push Notifications (`pkg/notifications/webpush.go`)**:
+  - Pure Web Push standard (RFC 8291, RFC 8292) using VAPID keys.
+  - VAPID keypair is generated automatically on first startup and persisted in SQLite `app_settings`.
+  - Push subscriptions (`PushSubscription` endpoint, p256dh, auth, profile) are persisted in `push_subscriptions`.
+  - Service Worker (`sw.js`) listens to `push` and `notificationclick` events, navigating directly to `/?play=:tconst&season=:s&episode=:e`.
+- **API Endpoints**:
+  - `GET /api/notifications/vapid-key`: Public VAPID key for browser `pushManager.subscribe`.
+  - `POST /api/notifications/subscribe`: Registers or updates device push subscription.
+  - `POST /api/notifications/unsubscribe`: Removes device push subscription.
+  - `POST /api/notifications/test`: Dispatches a test push notification to user profile.
+  - `GET /api/series/subscription?imdb_id=...`: Retrieves tracking state and preferred studio for a show.
+  - `POST /api/series/subscription`: Sets tracking toggle (`is_active`) and preferred studio.
+  - `GET /api/series/studios`: Returns array of all canonical Russian dubbing studios.
+  - `POST /api/series/check-now`: Immediate scan trigger across all tracked series or a specific IMDb ID.
 
 
